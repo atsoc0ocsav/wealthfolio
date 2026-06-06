@@ -1,7 +1,7 @@
 import { getAccounts, getTransferPairForActivity } from "@/adapters";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { usePortfolios } from "@/hooks/use-portfolios";
-import { useIsMobileViewport } from "@/hooks/use-platform";
+import { useIsCompactTableViewport, useIsMobileViewport } from "@/hooks/use-platform";
 import { debounce } from "@/lib/debounce";
 import { ActivityType } from "@/lib/constants";
 import { QueryKeys } from "@/lib/query-keys";
@@ -44,6 +44,7 @@ const ActivityPage = () => {
   const [showActionPalette, setShowActionPalette] = useState(false);
   const [showSpendingActionPalette, setShowSpendingActionPalette] = useState(false);
   const isMobileViewport = useIsMobileViewport();
+  const isCompactTableViewport = useIsCompactTableViewport();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const activityUrlFilterKey = searchParams.toString();
@@ -186,6 +187,7 @@ const ActivityPage = () => {
   const { deleteActivityMutation, duplicateActivityMutation } = useActivityMutations();
 
   const isDatagridView = viewMode === "datagrid";
+  const shouldUseDatagridView = isDatagridView && !isCompactTableViewport;
 
   // Resolve the typed scope to a flat account ID list for the activity search.
   const effectiveAccountIds = useMemo<string[] | undefined>(() => {
@@ -314,7 +316,7 @@ const ActivityPage = () => {
   const tableActivities = infiniteSearch.data;
   const datagridActivities = paginatedSearch.data;
   const totalFetched = tableActivities.length;
-  const totalRowCount = isDatagridView
+  const totalRowCount = shouldUseDatagridView
     ? paginatedSearch.totalRowCount
     : infiniteSearch.totalRowCount;
 
@@ -575,13 +577,15 @@ const ActivityPage = () => {
           onStatusFilterChange={setStatusFilter}
           viewMode={viewMode}
           onViewModeChange={setViewMode}
-          totalFetched={isDatagridView ? undefined : totalFetched}
-          totalRowCount={isDatagridView ? undefined : totalRowCount}
-          isFetching={isDatagridView ? paginatedSearch.isFetching : infiniteSearch.isFetching}
+          totalFetched={shouldUseDatagridView ? undefined : totalFetched}
+          totalRowCount={shouldUseDatagridView ? undefined : totalRowCount}
+          isFetching={
+            shouldUseDatagridView ? paginatedSearch.isFetching : infiniteSearch.isFetching
+          }
         />
       )}
 
-      {isMobileViewport ? (
+      {isCompactTableViewport ? (
         <ActivityTableMobile
           activities={tableActivities}
           isCompactView={isCompactView}
@@ -592,7 +596,7 @@ const ActivityPage = () => {
           onAdd={() => handleEdit(undefined)}
           onClearFilters={clearInvestmentsFilters}
         />
-      ) : isDatagridView ? (
+      ) : shouldUseDatagridView ? (
         <ActivityDataGrid
           accounts={investmentAccounts}
           activities={datagridActivities}
@@ -622,7 +626,7 @@ const ActivityPage = () => {
         />
       )}
 
-      {!isDatagridView && (
+      {!shouldUseDatagridView && (
         <ActivityPagination
           hasMore={infiniteSearch.hasNextPage ?? false}
           onLoadMore={infiniteSearch.fetchNextPage}
