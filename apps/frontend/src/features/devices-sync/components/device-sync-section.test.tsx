@@ -13,6 +13,7 @@ const hookMocks = vi.hoisted(() => ({
   getPairingSourceStatus: vi.fn(),
   pairingBootstrapActive: false,
   pairingCompletes: false,
+  pairingFails: false,
 }));
 
 interface MutationMock {
@@ -63,12 +64,18 @@ vi.mock("./pairing-flow", async () => {
       title,
       onBootstrapStateChange,
       onComplete,
+      onCancel,
     }: {
       title?: string;
       onBootstrapStateChange?: (state: "idle" | "active" | "failed") => void;
       onComplete?: () => void;
+      onCancel?: () => void;
     }) => {
       React.useEffect(() => {
+        if (hookMocks.pairingFails) {
+          onBootstrapStateChange?.("failed");
+          return () => onBootstrapStateChange?.("idle");
+        }
         if (hookMocks.pairingCompletes) {
           onBootstrapStateChange?.("active");
           onComplete?.();
@@ -79,7 +86,12 @@ vi.mock("./pairing-flow", async () => {
         return () => onBootstrapStateChange?.("idle");
       }, [onBootstrapStateChange, onComplete]);
 
-      return <div>{title ?? "Pairing Flow"}</div>;
+      return (
+        <div>
+          {title ?? "Pairing Flow"}
+          {hookMocks.pairingFails && <button onClick={onCancel}>Done</button>}
+        </div>
+      );
     },
     WaitingState: ({ title }: { title: string }) => <div>{title}</div>,
   };
@@ -94,6 +106,7 @@ describe("DeviceSyncSection", () => {
     vi.clearAllMocks();
     hookMocks.pairingBootstrapActive = false;
     hookMocks.pairingCompletes = false;
+    hookMocks.pairingFails = false;
 
     hookMocks.useRenameDevice.mockReturnValue({
       mutateAsync: vi.fn(),
@@ -480,6 +493,72 @@ describe("DeviceSyncSection", () => {
       await flushAsyncWork();
 
       expect(refetch).toHaveBeenCalled();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+        await Promise.resolve();
+      });
+
+      expect(bootstrapSync.mutateAsync).toHaveBeenCalledWith({ allowOverwrite: false });
+      expect(screen.getByText("Replace data on this device?")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows manual bootstrap retry after failed pairing bootstrap is dismissed", async () => {
+    vi.useFakeTimers();
+    try {
+      hookMocks.pairingFails = true;
+
+      const bootstrapSync = {
+        mutateAsync: vi.fn().mockResolvedValue({
+          status: "overwrite_required",
+          localRows: 12,
+          nonEmptyTables: [{ table: "accounts", rows: 1 }],
+        }),
+        isPending: false,
+        error: null,
+      };
+
+      hookMocks.useSyncStatus.mockReturnValue({
+        isLoading: false,
+        error: null,
+        syncState: "READY",
+        trustedDevices: [{ id: "trusted-1", name: "Laptop", platform: "mac", lastSeenAt: null }],
+        device: { trustState: "trusted" },
+        engineStatus: {
+          lastCycleStatus: "stale_cursor",
+          bootstrapRequired: true,
+          backgroundRunning: false,
+        },
+        engineIsFetching: false,
+        refetch: vi.fn(),
+      });
+      hookMocks.useDevices.mockReturnValue({
+        data: [],
+        isLoading: false,
+        error: null,
+      });
+      hookMocks.useSyncActions.mockReturnValue(createActions({ bootstrapSync }));
+      hookMocks.getPairingSourceStatus.mockResolvedValue({
+        status: "ready",
+        message: "Ready",
+        localCursor: 0,
+        serverCursor: 0,
+      });
+
+      renderWithQueryClient(<DeviceSyncSection />);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Connect Another Device" }));
+      });
+      await flushAsyncWork();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Done" }));
+      });
+      await flushAsyncWork();
 
       await act(async () => {
         fireEvent.click(screen.getByRole("button", { name: "Check again" }));

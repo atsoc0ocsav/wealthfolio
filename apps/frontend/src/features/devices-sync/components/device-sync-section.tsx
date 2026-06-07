@@ -135,6 +135,18 @@ export function DeviceSyncSection() {
     suppressReadyStateBootstrapPromptRef.current = suppressReadyStateBootstrapPrompt;
   }, [suppressReadyStateBootstrapPrompt]);
 
+  const releasePairingBootstrapOwner = useCallback(() => {
+    if (
+      bootstrapOwnerRef.current === "pairing" ||
+      bootstrapOwnerRef.current === "pairing_failed"
+    ) {
+      bootstrapOwnerRef.current = "none";
+    }
+    setBootstrapOwner((owner) =>
+      owner === "pairing" || owner === "pairing_failed" ? "none" : owner,
+    );
+  }, []);
+
   const canRunReadyStateBootstrap = useCallback((ignorePromptSuppression = false) => {
     return (
       bootstrapOwnerRef.current === "none" &&
@@ -186,36 +198,39 @@ export function DeviceSyncSection() {
     setSuppressReadyStateBootstrapPrompt(true);
     setShowBootstrapOverwriteDialog(false);
     setOverwriteRisk(null);
-    setBootstrapOwner((owner) =>
-      owner === "pairing" || owner === "pairing_failed" ? "none" : owner,
-    );
+    releasePairingBootstrapOwner();
     isPairingOpenRef.current = false;
     setIsPairingOpen(false);
     setIsPreparing(false);
     setPrepareError(null);
     queryClient.invalidateQueries({ queryKey: ["sync", "device", "current"] });
     status.refetch();
-  }, [queryClient, status.refetch]);
+  }, [queryClient, releasePairingBootstrapOwner, status.refetch]);
 
   const handlePairingCancel = useCallback(() => {
-    setBootstrapOwner((owner) => (owner === "pairing" ? "none" : owner));
+    releasePairingBootstrapOwner();
     isPairingOpenRef.current = false;
     setIsPairingOpen(false);
     setIsPreparing(false);
     setPrepareError(null);
-  }, []);
+  }, [releasePairingBootstrapOwner]);
 
   const handlePairingBootstrapStateChange = useCallback((state: PairingBootstrapState) => {
     if (state === "active" || state === "failed") {
       setShowBootstrapOverwriteDialog(false);
       setOverwriteRisk(null);
     }
+    if (state === "idle") {
+      releasePairingBootstrapOwner();
+      return;
+    }
+    bootstrapOwnerRef.current = state === "active" ? "pairing" : "pairing_failed";
     setBootstrapOwner((owner) => {
       if (state === "active") return "pairing";
       if (state === "failed") return "pairing_failed";
       return owner === "pairing" ? "none" : owner;
     });
-  }, []);
+  }, [releasePairingBootstrapOwner]);
 
   const handleRefresh = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["sync", "device", "current"] });
@@ -388,6 +403,10 @@ export function DeviceSyncSection() {
 
   const handleRetryBootstrap = useCallback(async () => {
     setSuppressReadyStateBootstrapPrompt(false);
+    if (bootstrapOwnerRef.current === "pairing_failed") {
+      bootstrapOwnerRef.current = "none";
+    }
+    setBootstrapOwner((owner) => (owner === "pairing_failed" ? "none" : owner));
     await runBootstrapCheck(true, true, true);
   }, [runBootstrapCheck]);
 
