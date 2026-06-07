@@ -64,6 +64,7 @@ import {
 } from "../hooks";
 import { syncService } from "../services/sync-service";
 import { SyncStates, type Device } from "../types";
+import { logSyncError, userFacingSyncErrorMessage } from "../utils/error-messages";
 import { E2EESetupCard } from "./e2ee-setup-card";
 import { PairingFlow, WaitingState, type PairingBootstrapState } from "./pairing-flow";
 import { RecoveryDialog } from "./recovery-dialog";
@@ -137,10 +138,12 @@ export function DeviceSyncSection() {
 
   const closeReadyStateBootstrapPrompt = useCallback(() => {
     setShowBootstrapOverwriteDialog(false);
+    setOverwriteRisk(null);
     setBootstrapOwner((owner) => (owner === "ready_state" ? "none" : owner));
   }, []);
 
   const openPairingDialog = useCallback(() => {
+    isPairingOpenRef.current = true;
     closeReadyStateBootstrapPrompt();
     setIsPairingOpen(true);
   }, [closeReadyStateBootstrapPrompt]);
@@ -151,6 +154,7 @@ export function DeviceSyncSection() {
         openPairingDialog();
         return;
       }
+      isPairingOpenRef.current = false;
       setIsPairingOpen(false);
     },
     [openPairingDialog],
@@ -162,6 +166,7 @@ export function DeviceSyncSection() {
         openPairingDialog();
         return;
       }
+      isPairingOpenRef.current = false;
       setIsPairingOpen(false);
       setIsPreparing(false);
       setPrepareError(null);
@@ -173,6 +178,7 @@ export function DeviceSyncSection() {
     setBootstrapOwner((owner) =>
       owner === "pairing" || owner === "pairing_failed" ? "none" : owner,
     );
+    isPairingOpenRef.current = false;
     setIsPairingOpen(false);
     setIsPreparing(false);
     setPrepareError(null);
@@ -182,6 +188,7 @@ export function DeviceSyncSection() {
 
   const handlePairingCancel = useCallback(() => {
     setBootstrapOwner((owner) => (owner === "pairing" ? "none" : owner));
+    isPairingOpenRef.current = false;
     setIsPairingOpen(false);
     setIsPreparing(false);
     setPrepareError(null);
@@ -220,8 +227,9 @@ export function DeviceSyncSection() {
         toast.success("Background sync resumed");
       }
     } catch (err) {
+      logSyncError("Failed to update background sync", err);
       toast.error("Failed to update background sync", {
-        description: err instanceof Error ? err.message : "An unexpected error occurred",
+        description: userFacingSyncErrorMessage(err),
       });
     }
   }, [actions, isBackgroundRunning]);
@@ -262,8 +270,9 @@ export function DeviceSyncSection() {
       });
       return true;
     } catch (err) {
+      logSyncError("Backup before bootstrap failed", err);
       toast.error("Backup failed", {
-        description: err instanceof Error ? err.message : "An unexpected error occurred",
+        description: userFacingSyncErrorMessage(err),
       });
       return false;
     } finally {
@@ -285,8 +294,9 @@ export function DeviceSyncSection() {
       setShowBootstrapOverwriteDialog(false);
       setBootstrapOwner((owner) => (owner === "ready_state" ? "none" : owner));
     } catch (err) {
+      logSyncError("Bootstrap overwrite failed", err);
       toast.error("Unable to continue sync", {
-        description: err instanceof Error ? err.message : "An unexpected error occurred",
+        description: userFacingSyncErrorMessage(err),
       });
     }
   }, [actions]);
@@ -351,9 +361,10 @@ export function DeviceSyncSection() {
           }
         }
       } catch (err) {
+        logSyncError("Bootstrap retry failed", err);
         if (showToast) {
           toast.error("Could not retry sync", {
-            description: err instanceof Error ? err.message : "An unexpected error occurred",
+            description: userFacingSyncErrorMessage(err),
           });
         }
       }
@@ -391,8 +402,9 @@ export function DeviceSyncSection() {
         description: result.message,
       });
     } catch (err) {
+      logSyncError("Snapshot upload failed", err);
       toast.error("Snapshot upload failed", {
-        description: err instanceof Error ? err.message : "An unexpected error occurred",
+        description: userFacingSyncErrorMessage(err),
       });
     } finally {
       setIsUploadingSnapshot(false);
@@ -408,7 +420,8 @@ export function DeviceSyncSection() {
       await actions.reinitializeSync.mutateAsync();
       setIsPreparing(false);
     } catch (err) {
-      setPrepareError(err instanceof Error ? err.message : "An unexpected error occurred");
+      logSyncError("Pairing preparation failed", err);
+      setPrepareError(userFacingSyncErrorMessage(err));
     }
   }, [actions.reinitializeSync, openPairingDialog]);
 
@@ -441,7 +454,8 @@ export function DeviceSyncSection() {
       setIsPreparing(false);
       openPairingDialog();
     } catch (err) {
-      setPrepareError(err instanceof Error ? err.message : "An unexpected error occurred");
+      logSyncError("Pairing source check failed", err);
+      setPrepareError(userFacingSyncErrorMessage(err));
       openPairingDialog();
     }
   }, [actions.reinitializeSync, openPairingDialog, otherConnectedDevices]);
@@ -523,7 +537,9 @@ export function DeviceSyncSection() {
           <div className="flex flex-col items-center justify-center py-6 text-center">
             <Icons.AlertCircle className="text-destructive mb-3 h-10 w-10 opacity-70" />
             <p className="text-destructive text-sm font-medium">Initialization Failed</p>
-            <p className="text-muted-foreground mt-1 max-w-sm text-xs">{status.error.message}</p>
+            <p className="text-muted-foreground mt-1 max-w-sm text-xs">
+              {userFacingSyncErrorMessage(status.error)}
+            </p>
             <Button variant="outline" className="mt-4" onClick={handleRefresh}>
               <Icons.RefreshCw className="mr-2 h-4 w-4" />
               Retry
@@ -774,9 +790,7 @@ export function DeviceSyncSection() {
             {actions.bootstrapSync.error && (
               <div className="bg-destructive/10 text-destructive mb-3 flex items-center gap-2 rounded-md px-3 py-2 text-xs">
                 <Icons.AlertCircle className="h-3.5 w-3.5" />
-                {actions.bootstrapSync.error instanceof Error
-                  ? actions.bootstrapSync.error.message
-                  : String(actions.bootstrapSync.error)}
+                {userFacingSyncErrorMessage(actions.bootstrapSync.error)}
               </div>
             )}
             {isWaitingForRemoteSnapshot && (
@@ -838,7 +852,7 @@ export function DeviceSyncSection() {
                 </div>
               </div>
             )}
-            {overwriteRisk && (
+            {overwriteRisk && !isPairingOpen && (
               <div className="mb-3 rounded-md border border-amber-200 bg-amber-50/80 px-3 py-3 text-xs text-amber-900 dark:border-amber-900/60 dark:bg-amber-900/20 dark:text-amber-200">
                 <div className="flex items-start gap-2">
                   <Icons.AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -1056,8 +1070,8 @@ function OrphanedKeysPrompt({ onReinitialize }: { onReinitialize: () => Promise<
       await onReinitialize();
       setShowConfirmDialog(false);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "An unexpected error occurred";
-      toast.error("Failed to reinitialize sync", { description: message });
+      logSyncError("Reinitialize sync failed", err);
+      toast.error("Failed to reinitialize sync", { description: userFacingSyncErrorMessage(err) });
     } finally {
       setIsReinitializing(false);
     }
@@ -1156,9 +1170,7 @@ function ConnectedDevicesList({
       <div className="flex flex-col items-center justify-center rounded-lg border p-6 text-center">
         <Icons.AlertCircle className="text-destructive mb-2 h-8 w-8 opacity-70" />
         <p className="text-sm font-medium">Failed to load devices</p>
-        <p className="text-muted-foreground mt-1 text-xs">
-          {error instanceof Error ? error.message : "Please try refreshing"}
-        </p>
+        <p className="text-muted-foreground mt-1 text-xs">Please try refreshing.</p>
       </div>
     );
   }
@@ -1226,8 +1238,9 @@ function PairThisDeviceItem({ onPair }: { onPair: () => void }) {
       await clearSyncData.mutateAsync();
       setShowResetAlert(false);
     } catch (err) {
+      logSyncError("Disconnect device failed", err);
       toast.error("Failed to disconnect", {
-        description: err instanceof Error ? err.message : "An unexpected error occurred",
+        description: userFacingSyncErrorMessage(err),
       });
     } finally {
       setIsResetting(false);
@@ -1414,8 +1427,8 @@ function DeviceCard({
       }
       setShowUnpairAlert(false);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "An unexpected error occurred";
-      toast.error("Failed to unpair device", { description: message });
+      logSyncError("Unpair device failed", err);
+      toast.error("Failed to unpair device", { description: userFacingSyncErrorMessage(err) });
     } finally {
       setIsUnpairing(false);
     }

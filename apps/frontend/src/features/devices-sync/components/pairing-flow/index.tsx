@@ -16,6 +16,7 @@ import { Icons } from "@wealthfolio/ui";
 import { Button } from "@wealthfolio/ui/components/ui/button";
 import { useEffect, useRef, useCallback, useState } from "react";
 import { usePairingIssuer, usePairingClaimer, useSyncStatus } from "../../hooks";
+import { logSyncError, userFacingSyncErrorMessage } from "../../utils/error-messages";
 import { DisplayCode } from "./display-code";
 import { SASVerification } from "./sas-verification";
 import { WaitingState } from "./waiting-state";
@@ -256,7 +257,8 @@ function ClaimerFlow({
       }
       await approveOverwrite();
     } catch (err) {
-      setBackupError(err instanceof Error ? err.message : "Backup failed");
+      logSyncError("Pairing overwrite backup failed", err);
+      setBackupError(userFacingSyncErrorMessage(err, "Backup failed"));
     } finally {
       setIsBackingUp(false);
     }

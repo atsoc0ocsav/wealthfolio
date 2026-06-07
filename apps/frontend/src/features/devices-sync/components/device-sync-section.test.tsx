@@ -44,6 +44,13 @@ vi.mock("../services/sync-service", () => ({
 }));
 
 vi.mock("@/adapters", () => ({
+  logger: {
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+    trace: vi.fn(),
+  },
   backupDatabase: vi.fn(),
   openFileSaveDialog: vi.fn(),
 }));
@@ -283,6 +290,7 @@ describe("DeviceSyncSection", () => {
       });
 
       expect(screen.queryByText("Replace data on this device?")).not.toBeInTheDocument();
+      expect(screen.queryByText("This device already has data")).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -343,6 +351,7 @@ describe("DeviceSyncSection", () => {
 
       expect(hookMocks.getPairingSourceStatus).toHaveBeenCalledTimes(1);
       expect(screen.queryByText("Replace data on this device?")).not.toBeInTheDocument();
+      expect(screen.queryByText("This device already has data")).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
