@@ -93,6 +93,7 @@ const VISIBLE_SPENDING_DASHBOARD_PERIODS: SpendingDashboardPeriod[] = [
 
 const DEFAULT_INTERVAL: SpendingDashboardPeriod = "MTD";
 const INTERVAL_STORAGE_KEY = "spending-interval";
+const MONTH_STORAGE_KEY = "spending-month";
 const MONTH_PARAM = "spendingMonth";
 const INTERVAL_DESCRIPTIONS: Record<SpendingDashboardPeriod, string> = {
   MTD: "this month",
@@ -268,11 +269,12 @@ function insightPeriodForDashboardInterval(code: SpendingDashboardPeriod): Repor
 function selectionFromParams(
   params: URLSearchParams,
   persistedInterval: string,
+  persistedMonth: string | null,
 ): SpendingSelection {
   const restoreCode = normalizeSpendingDashboardPeriod(
     params.get("spendingInterval") ?? persistedInterval,
   );
-  const monthKey = params.get(MONTH_PARAM);
+  const monthKey = params.get(MONTH_PARAM) ?? persistedMonth;
   if (monthKey && parseMonthKey(monthKey)) return { kind: "month", monthKey, restoreCode };
   return { kind: "period", code: restoreCode };
 }
@@ -429,9 +431,13 @@ export default function SpendingTabContent() {
     INTERVAL_STORAGE_KEY,
     DEFAULT_INTERVAL,
   );
+  const [persistedMonth, setPersistedMonth] = usePersistentState<string | null>(
+    MONTH_STORAGE_KEY,
+    null,
+  );
   const selection = useMemo(
-    () => selectionFromParams(searchParams, persistedInterval),
-    [searchParams, persistedInterval],
+    () => selectionFromParams(searchParams, persistedInterval, persistedMonth),
+    [searchParams, persistedInterval, persistedMonth],
   );
   const selectedPeriod = selection.kind === "period" ? selection.code : null;
   const customMonth = selection.kind === "month" ? selection.monthKey : null;
@@ -486,8 +492,18 @@ export default function SpendingTabContent() {
   const { data: budget, isError: budgetErrored } = useBudget();
   const todayParts = useMemo(() => getZonedDateParts(new Date(), appTimezone), [appTimezone]);
   const currentBudgetMonthKey = useMemo(() => monthKeyFromParts(todayParts), [todayParts]);
-  const [budgetMonthKey, setBudgetMonthKey] = useState(() => monthKeyFromParts(todayParts));
-  const [budgetMonthTouched, setBudgetMonthTouched] = useState(false);
+  const [budgetMonthKey, setBudgetMonthKey] = useState(() => {
+    const current = monthKeyFromParts(todayParts);
+    if (selection.kind === "period" && selection.code === "LAST_MONTH")
+      return addMonthsToMonthKey(current, -1);
+    if (selection.kind === "month" && selection.monthKey <= current) return selection.monthKey;
+    return current;
+  });
+  const [budgetMonthTouched, setBudgetMonthTouched] = useState(
+    () =>
+      (selection.kind === "period" && selection.code === "LAST_MONTH") ||
+      selection.kind === "month",
+  );
   useEffect(() => {
     setBudgetMonthKey((monthKey) => {
       if (!budgetMonthTouched) return currentBudgetMonthKey;
@@ -610,6 +626,7 @@ export default function SpendingTabContent() {
 
   const handleIntervalSelect = (code: SpendingDashboardPeriod) => {
     setPersistedInterval(code);
+    setPersistedMonth(null);
     setSearchParams(
       (prev) => {
         const p = new URLSearchParams(prev);
@@ -619,9 +636,17 @@ export default function SpendingTabContent() {
       },
       { replace: true },
     );
+    if (code === "LAST_MONTH") {
+      setBudgetMonthKey(addMonthsToMonthKey(currentBudgetMonthKey, -1));
+      setBudgetMonthTouched(true);
+    } else {
+      setBudgetMonthKey(currentBudgetMonthKey);
+      setBudgetMonthTouched(false);
+    }
   };
 
   const handleCustomMonthSelect = (monthKey: string | null) => {
+    setPersistedMonth(monthKey);
     setSearchParams(
       (prev) => {
         const p = new URLSearchParams(prev);
@@ -636,6 +661,13 @@ export default function SpendingTabContent() {
       },
       { replace: true },
     );
+    if (monthKey && monthKey <= currentBudgetMonthKey) {
+      setBudgetMonthKey(monthKey);
+      setBudgetMonthTouched(true);
+    } else {
+      setBudgetMonthKey(currentBudgetMonthKey);
+      setBudgetMonthTouched(false);
+    }
   };
 
   const granularity: "day" | "week" | "month" = useMemo(() => {
