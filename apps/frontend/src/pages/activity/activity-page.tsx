@@ -36,9 +36,7 @@ import { MobileActivityForm } from "./components/mobile-forms/mobile-activity-fo
 import { useActivityMutations } from "./hooks/use-activity-mutations";
 import { useActivitySearch, type ActivityStatusFilter } from "./hooks/use-activity-search";
 import {
-  clearActivityUrlDateFilters,
   clearActivityUrlFilters,
-  clearActivityUrlTypeFilters,
   resolveActivityTabFromUrlFilters,
   resolveActivityUrlFilters,
 } from "./utils/url-filters";
@@ -47,6 +45,17 @@ interface ActivityDateRangeFilter {
   from?: string;
   to?: string;
 }
+
+interface InvestmentFilterOverrides {
+  accountScope?: AccountScope;
+  statusFilter?: ActivityStatusFilter;
+  activityTypes?: ActivityType[];
+  instrumentTypes?: string[];
+  dateRange?: ActivityDateRangeFilter;
+  searchQuery?: string;
+}
+
+const ALL_ACCOUNT_SCOPE: AccountScope = { type: "all" };
 
 function parseLocalDate(value?: string): Date | undefined {
   if (!value) return undefined;
@@ -130,22 +139,39 @@ const ActivityPage = () => {
     isLoading: isSpendingSettingsLoading,
   } = useSpendingSettings();
 
-  const accountScope = activityUrlFilters.accountScope ?? persistedAccountScope;
-  const statusFilter = activityUrlFilters.statusFilter ?? persistedStatusFilter;
+  const hasActivityUrlFilters =
+    searchParams.has("account") ||
+    searchParams.has("needsReview") ||
+    searchParams.has("types") ||
+    searchParams.has("from") ||
+    searchParams.has("to") ||
+    searchParams.has("q");
+  const accountScope =
+    activityUrlFilters.accountScope ?? (hasActivityUrlFilters ? ALL_ACCOUNT_SCOPE : persistedAccountScope);
+  const statusFilter =
+    activityUrlFilters.statusFilter ?? (hasActivityUrlFilters ? "all" : persistedStatusFilter);
   // Health Center deeplinks can scope the list to specific activity types / a date
   // window (e.g. transfers around an incomplete-transfer issue). URL wins over persisted.
   const urlActivityTypes = activityUrlFilters.activityTypes;
-  const effectiveActivityTypes = urlActivityTypes ?? selectedActivityTypes;
+  const effectiveActivityTypes =
+    urlActivityTypes ?? (hasActivityUrlFilters ? [] : selectedActivityTypes);
   const urlDateFrom = activityUrlFilters.dateFrom;
   const urlDateTo = activityUrlFilters.dateTo;
-  const effectiveDateFrom = urlDateFrom ?? selectedDateRange.from;
-  const effectiveDateTo = urlDateTo ?? selectedDateRange.to;
+  const effectiveDateFrom = urlDateFrom ?? (hasActivityUrlFilters ? undefined : selectedDateRange.from);
+  const effectiveDateTo = urlDateTo ?? (hasActivityUrlFilters ? undefined : selectedDateRange.to);
+  const urlSearchQuery = activityUrlFilters.searchQuery;
+  const effectiveSearchQuery = urlSearchQuery ?? (hasActivityUrlFilters ? "" : searchQuery);
+  const displayedSearchInput = urlSearchQuery ?? (hasActivityUrlFilters ? "" : searchInput);
+  const effectiveInstrumentTypes = useMemo(
+    () => (hasActivityUrlFilters ? [] : selectedInstrumentTypes),
+    [hasActivityUrlFilters, selectedInstrumentTypes],
+  );
   const effectiveDateRange = useMemo(
     () => toDateRange({ from: effectiveDateFrom, to: effectiveDateTo }),
     [effectiveDateFrom, effectiveDateTo],
   );
 
-  const clearBrokerReviewUrlFilters = useCallback(() => {
+  const clearActivityUrlFilterParams = useCallback(() => {
     setSearchParams(
       (prev) => {
         const next = clearActivityUrlFilters(prev);
@@ -155,68 +181,74 @@ const ActivityPage = () => {
     );
   }, [setSearchParams]);
 
-  const setAccountScope = useCallback(
-    (scope: AccountScope) => {
-      setPersistedAccountScope(scope);
-      if (activityUrlFilters.statusFilter) {
-        setPersistedStatusFilter(activityUrlFilters.statusFilter);
+  const materializeInvestmentFilters = useCallback(
+    (overrides: InvestmentFilterOverrides = {}) => {
+      setPersistedAccountScope(overrides.accountScope ?? accountScope);
+      setPersistedStatusFilter(overrides.statusFilter ?? statusFilter);
+      setSelectedActivityTypes(overrides.activityTypes ?? effectiveActivityTypes);
+      setSelectedInstrumentTypes(overrides.instrumentTypes ?? effectiveInstrumentTypes);
+      setSelectedDateRange(overrides.dateRange ?? { from: effectiveDateFrom, to: effectiveDateTo });
+
+      const nextSearchQuery = overrides.searchQuery ?? displayedSearchInput;
+      setSearchInput(nextSearchQuery);
+      setSearchQuery(nextSearchQuery);
+
+      if (hasActivityUrlFilters) {
+        clearActivityUrlFilterParams();
       }
-      clearBrokerReviewUrlFilters();
     },
     [
-      activityUrlFilters.statusFilter,
-      clearBrokerReviewUrlFilters,
+      accountScope,
+      clearActivityUrlFilterParams,
+      displayedSearchInput,
+      effectiveActivityTypes,
+      effectiveDateFrom,
+      effectiveDateTo,
+      effectiveInstrumentTypes,
+      hasActivityUrlFilters,
       setPersistedAccountScope,
       setPersistedStatusFilter,
+      setSearchInput,
+      setSelectedActivityTypes,
+      setSelectedDateRange,
+      setSelectedInstrumentTypes,
+      statusFilter,
     ],
+  );
+
+  const setAccountScope = useCallback(
+    (scope: AccountScope) => {
+      materializeInvestmentFilters({ accountScope: scope });
+    },
+    [materializeInvestmentFilters],
   );
 
   const setStatusFilter = useCallback(
     (status: ActivityStatusFilter) => {
-      if (activityUrlFilters.accountScope) {
-        setPersistedAccountScope(activityUrlFilters.accountScope);
-      }
-      setPersistedStatusFilter(status);
-      clearBrokerReviewUrlFilters();
+      materializeInvestmentFilters({ statusFilter: status });
     },
-    [
-      activityUrlFilters.accountScope,
-      clearBrokerReviewUrlFilters,
-      setPersistedAccountScope,
-      setPersistedStatusFilter,
-    ],
+    [materializeInvestmentFilters],
   );
 
   const setInvestmentDateRange = useCallback(
     (range: DateRange | undefined) => {
-      setSelectedDateRange(fromDateRange(range));
-      if (urlDateFrom || urlDateTo) {
-        setSearchParams(
-          (prev) => {
-            const next = clearActivityUrlDateFilters(prev);
-            return next.toString() === prev.toString() ? prev : next;
-          },
-          { replace: true },
-        );
-      }
+      materializeInvestmentFilters({ dateRange: fromDateRange(range) });
     },
-    [setSearchParams, setSelectedDateRange, urlDateFrom, urlDateTo],
+    [materializeInvestmentFilters],
   );
 
   const setInvestmentActivityTypes = useCallback(
     (types: ActivityType[]) => {
-      setSelectedActivityTypes(types);
-      if (urlActivityTypes) {
-        setSearchParams(
-          (prev) => {
-            const next = clearActivityUrlTypeFilters(prev);
-            return next.toString() === prev.toString() ? prev : next;
-          },
-          { replace: true },
-        );
-      }
+      materializeInvestmentFilters({ activityTypes: types });
     },
-    [setSearchParams, setSelectedActivityTypes, urlActivityTypes],
+    [materializeInvestmentFilters],
+  );
+
+  const setInvestmentInstrumentTypes = useCallback(
+    (types: string[]) => {
+      materializeInvestmentFilters({ instrumentTypes: types });
+    },
+    [materializeInvestmentFilters],
   );
 
   // Coerce "spending" URL state back to investments when the module is disabled.
@@ -266,9 +298,13 @@ const ActivityPage = () => {
   const handleSearchChange = useCallback(
     (value: string) => {
       setSearchInput(value);
+      if (hasActivityUrlFilters) {
+        materializeInvestmentFilters({ searchQuery: value });
+        return;
+      }
       debouncedUpdateSearch(value);
     },
-    [debouncedUpdateSearch, setSearchInput],
+    [debouncedUpdateSearch, hasActivityUrlFilters, materializeInvestmentFilters, setSearchInput],
   );
 
   // Cleanup debounced function on unmount
@@ -368,12 +404,12 @@ const ActivityPage = () => {
     filters: {
       accountIds: effectiveInvestmentAccountIds,
       activityTypes: effectiveActivityTypes,
-      instrumentTypes: selectedInstrumentTypes,
+      instrumentTypes: effectiveInstrumentTypes,
       status: statusFilter,
       dateFrom: effectiveDateFrom,
       dateTo: effectiveDateTo,
     },
-    searchQuery,
+    searchQuery: effectiveSearchQuery,
     sorting,
   });
 
@@ -383,12 +419,12 @@ const ActivityPage = () => {
     filters: {
       accountIds: effectiveInvestmentAccountIds,
       activityTypes: effectiveActivityTypes,
-      instrumentTypes: selectedInstrumentTypes,
+      instrumentTypes: effectiveInstrumentTypes,
       status: statusFilter,
       dateFrom: effectiveDateFrom,
       dateTo: effectiveDateTo,
     },
-    searchQuery,
+    searchQuery: effectiveSearchQuery,
     sorting,
     pageIndex,
     pageSize,
@@ -403,11 +439,11 @@ const ActivityPage = () => {
     effectiveInvestmentAccountIds,
     isDatagridView,
     effectiveActivityTypes,
-    selectedInstrumentTypes,
+    effectiveInstrumentTypes,
     statusFilter,
     effectiveDateFrom,
     effectiveDateTo,
-    searchQuery,
+    effectiveSearchQuery,
     setPageIndex,
     sorting,
   ]);
@@ -496,11 +532,11 @@ const ActivityPage = () => {
   const investmentsFiltersActive =
     accountScope.type !== "all" ||
     effectiveActivityTypes.length > 0 ||
-    selectedInstrumentTypes.length > 0 ||
+    effectiveInstrumentTypes.length > 0 ||
     statusFilter !== "all" ||
     !!effectiveDateFrom ||
     !!effectiveDateTo ||
-    searchInput.trim().length > 0;
+    displayedSearchInput.trim().length > 0;
 
   const clearInvestmentsFilters = useCallback(() => {
     setPersistedAccountScope({ type: "all" });
@@ -510,9 +546,9 @@ const ActivityPage = () => {
     setSelectedDateRange({});
     setSearchInput("");
     setSearchQuery("");
-    clearBrokerReviewUrlFilters();
+    clearActivityUrlFilterParams();
   }, [
-    clearBrokerReviewUrlFilters,
+    clearActivityUrlFilterParams,
     setPersistedAccountScope,
     setSelectedActivityTypes,
     setSelectedInstrumentTypes,
@@ -656,7 +692,7 @@ const ActivityPage = () => {
         <ActivityMobileControls
           accounts={investmentAccounts}
           portfolios={portfolios}
-          searchQuery={searchInput}
+          searchQuery={displayedSearchInput}
           onSearchQueryChange={handleSearchChange}
           accountScope={accountScope}
           onAccountScopeChange={setAccountScope}
@@ -671,14 +707,14 @@ const ActivityPage = () => {
         <ActivityViewControls
           accounts={investmentAccounts}
           portfolios={portfolios}
-          searchQuery={searchInput}
+          searchQuery={displayedSearchInput}
           onSearchQueryChange={handleSearchChange}
           accountScope={accountScope}
           onAccountScopeChange={setAccountScope}
           selectedActivityTypes={effectiveActivityTypes}
           onActivityTypesChange={setInvestmentActivityTypes}
-          selectedInstrumentTypes={selectedInstrumentTypes}
-          onInstrumentTypesChange={setSelectedInstrumentTypes}
+          selectedInstrumentTypes={effectiveInstrumentTypes}
+          onInstrumentTypesChange={setInvestmentInstrumentTypes}
           statusFilter={statusFilter}
           onStatusFilterChange={setStatusFilter}
           dateRange={effectiveDateRange}
