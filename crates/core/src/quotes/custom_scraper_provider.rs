@@ -60,6 +60,8 @@ impl CustomScraperProvider {
         to: Option<&str>,
     ) -> String {
         let isin_owned: Option<String> = context.and_then(|ctx| {
+            // Prefer explicit identifiers so equity ISINs can be used without changing the
+            // canonical instrument; bonds fall back to their instrument ISIN.
             ctx.identifiers
                 .isin
                 .as_deref()
@@ -93,6 +95,10 @@ impl CustomScraperProvider {
         };
 
         expand_template(url, &tctx)
+    }
+
+    fn source_url_has_identity_placeholder(url: &str) -> bool {
+        url.contains("{SYMBOL}") || url.contains("{ISIN}")
     }
 
     /// Build HTTP headers from source config, resolving secrets.
@@ -619,7 +625,7 @@ impl CustomScraperProvider {
     /// Find candidate sources for the given kind.
     /// If `custom_provider_code` is set, returns that single provider's source.
     /// Otherwise, returns sources from all enabled custom providers whose URL
-    /// contains `{SYMBOL}` (general-purpose sources that work like built-in providers).
+    /// contains an identity placeholder (general-purpose sources that work like built-in providers).
     fn find_sources(
         &self,
         context: &QuoteContext,
@@ -641,7 +647,7 @@ impl CustomScraperProvider {
             return Ok(vec![source]);
         }
 
-        // No explicit code — collect general-purpose sources (URL contains {SYMBOL})
+        // No explicit code — collect general-purpose sources (URL contains an identity placeholder)
         // from all enabled custom providers, tried in priority order.
         let providers = self
             .repo
@@ -655,7 +661,7 @@ impl CustomScraperProvider {
             .into_iter()
             .filter(|p| p.enabled)
             .flat_map(|p| p.sources.into_iter().filter(|s| s.kind == kind))
-            .filter(|s| s.url.contains("{SYMBOL}"))
+            .filter(|s| Self::source_url_has_identity_placeholder(&s.url))
             .collect();
 
         if sources.is_empty() {
@@ -1246,6 +1252,80 @@ mod tests {
         }
     }
 
+    fn source_with_url(provider_id: &str, kind: &str, url: &str) -> CustomProviderSource {
+        let mut source = json_source("$.price");
+        source.id = format!("{provider_id}:{kind}");
+        source.provider_id = provider_id.to_string();
+        source.kind = kind.to_string();
+        source.url = url.to_string();
+        source
+    }
+
+    struct MockCustomProviderRepository {
+        providers: Vec<crate::custom_provider::CustomProviderWithSources>,
+    }
+
+    #[async_trait::async_trait]
+    impl CustomProviderRepository for MockCustomProviderRepository {
+        fn get_all(
+            &self,
+        ) -> crate::errors::Result<Vec<crate::custom_provider::CustomProviderWithSources>> {
+            Ok(self.providers.clone())
+        }
+
+        fn get_source_by_kind(
+            &self,
+            provider_code: &str,
+            kind: &str,
+        ) -> crate::errors::Result<Option<CustomProviderSource>> {
+            Ok(self
+                .providers
+                .iter()
+                .find(|provider| provider.id == provider_code)
+                .and_then(|provider| provider.sources.iter().find(|source| source.kind == kind))
+                .cloned())
+        }
+
+        async fn create(
+            &self,
+            _payload: &crate::custom_provider::NewCustomProvider,
+        ) -> crate::errors::Result<crate::custom_provider::CustomProviderWithSources> {
+            unreachable!("not used by custom scraper provider tests")
+        }
+
+        async fn update(
+            &self,
+            _provider_code: &str,
+            _payload: &crate::custom_provider::UpdateCustomProvider,
+        ) -> crate::errors::Result<crate::custom_provider::CustomProviderWithSources> {
+            unreachable!("not used by custom scraper provider tests")
+        }
+
+        async fn delete(&self, _provider_code: &str) -> crate::errors::Result<()> {
+            unreachable!("not used by custom scraper provider tests")
+        }
+
+        fn get_asset_count_for_provider(&self, _provider_code: &str) -> crate::errors::Result<i64> {
+            Ok(0)
+        }
+    }
+
+    struct MockSecretStore;
+
+    impl SecretStore for MockSecretStore {
+        fn set_secret(&self, _service: &str, _secret: &str) -> crate::errors::Result<()> {
+            Ok(())
+        }
+
+        fn get_secret(&self, _service: &str) -> crate::errors::Result<Option<String>> {
+            Ok(None)
+        }
+
+        fn delete_secret(&self, _service: &str) -> crate::errors::Result<()> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn expand_url_uses_equity_identifier_isin_independently_from_symbol() {
         let context = QuoteContext {
@@ -1275,6 +1355,59 @@ mod tests {
             url,
             "https://server/history/SI0031101346/LKPG/2026-03-13/2026-06-11/json"
         );
+    }
+
+    #[test]
+    fn find_sources_includes_isin_only_general_sources() {
+        let repo = Arc::new(MockCustomProviderRepository {
+            providers: vec![
+                crate::custom_provider::CustomProviderWithSources {
+                    id: "isin-source".to_string(),
+                    name: "ISIN Source".to_string(),
+                    description: String::new(),
+                    enabled: true,
+                    priority: 1,
+                    sources: vec![source_with_url(
+                        "isin-source",
+                        "latest",
+                        "https://example.test/quotes/{ISIN}",
+                    )],
+                },
+                crate::custom_provider::CustomProviderWithSources {
+                    id: "static-source".to_string(),
+                    name: "Static Source".to_string(),
+                    description: String::new(),
+                    enabled: true,
+                    priority: 2,
+                    sources: vec![source_with_url(
+                        "static-source",
+                        "latest",
+                        "https://example.test/quotes/static",
+                    )],
+                },
+            ],
+        });
+        let provider = CustomScraperProvider::new(repo, Arc::new(MockSecretStore));
+        let context = QuoteContext {
+            instrument: InstrumentId::Equity {
+                ticker: Arc::from("LKPG"),
+                mic: None,
+            },
+            identifiers: QuoteIdentifiers {
+                isin: Some(Cow::Borrowed("SI0031101346")),
+            },
+            overrides: None,
+            currency_hint: Some(Cow::Borrowed("EUR")),
+            preferred_provider: None,
+            bond_metadata: None,
+            custom_provider_code: None,
+        };
+
+        let sources = provider.find_sources(&context, "latest").unwrap();
+
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].provider_id, "isin-source");
+        assert_eq!(sources[0].url, "https://example.test/quotes/{ISIN}");
     }
 
     #[test]
