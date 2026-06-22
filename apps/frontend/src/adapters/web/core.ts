@@ -394,6 +394,13 @@ export const COMMANDS: CommandMap = {
   unlink_liability: { method: "DELETE", path: "/alternative-assets" },
   update_alternative_asset_metadata: { method: "PUT", path: "/alternative-assets" },
   get_alternative_holdings: { method: "GET", path: "/alternative-holdings" },
+  // Agent Access (PATs + audit log)
+  get_agent_access_status: { method: "GET", path: "/agent-access/status" },
+  list_agent_access_tokens: { method: "GET", path: "/agent-access/tokens" },
+  create_agent_access_token: { method: "POST", path: "/agent-access/tokens" },
+  revoke_agent_access_token: { method: "DELETE", path: "/agent-access/tokens" },
+  list_agent_audit_log: { method: "GET", path: "/agent-access/audit" },
+  purge_agent_audit_log: { method: "POST", path: "/agent-access/audit/purge" },
 };
 
 /**
@@ -1972,6 +1979,30 @@ export const invoke = async <T>(command: string, payload?: Record<string, unknow
     case "get_ai_thread_tags": {
       const { threadId } = payload as { threadId: string };
       url += `/${encodeURIComponent(threadId)}/tags`;
+      break;
+    }
+    // Agent Access
+    case "create_agent_access_token": {
+      const { name, expiresAt } = payload as { name: string; expiresAt?: string };
+      body = JSON.stringify({ name, expiresAt });
+      break;
+    }
+    case "revoke_agent_access_token": {
+      const { id } = payload as { id: string };
+      url += `/${encodeURIComponent(id)}`;
+      break;
+    }
+    case "list_agent_audit_log": {
+      const { page, pageSize, tool } = payload as {
+        page: number;
+        pageSize: number;
+        tool?: string;
+      };
+      const params = new URLSearchParams();
+      params.set("page", String(page));
+      params.set("pageSize", String(pageSize));
+      if (tool) params.set("tool", tool);
+      url += `?${params.toString()}`;
       break;
     }
   }

@@ -352,3 +352,88 @@ export interface EphemeralKeyPair {
   publicKey: string; // Base64
   secretKey: string; // Base64
 }
+
+// ============================================================================
+// Agent Access (MCP server + personal access tokens)
+// ============================================================================
+
+/** Embedded MCP server status (desktop only). */
+export interface McpServerStatus {
+  enabled: boolean;
+  autoStart: boolean;
+  auditEnabled: boolean;
+  running: boolean;
+  port: number | null;
+  startedAt: string | null;
+  tokenFingerprint: string | null;
+}
+
+/** Result of rotating the local MCP token. The token is shown exactly once. */
+export interface McpRotatedToken {
+  token: string;
+  status: McpServerStatus;
+}
+
+/** Connection details for the embedded MCP server (desktop only). */
+export interface McpConnectionInfo {
+  url: string;
+  /** Full bearer token — handle with care, never log it. */
+  token: string;
+}
+
+/** Agent access status for the web server's `/mcp` endpoint. */
+export interface AgentAccessStatus {
+  mcpEnabled: boolean;
+  auditEnabled: boolean;
+  endpoint: string;
+}
+
+/** Personal access token metadata (web only; the secret is never returned). */
+export interface AgentAccessToken {
+  id: string;
+  name: string;
+  tokenPrefix: string;
+  scopes: string[];
+  createdAt: string;
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+}
+
+/** Created personal access token. `token` is shown exactly once. */
+export interface CreatedAgentAccessToken {
+  token: string;
+  id: string;
+  name: string;
+  tokenPrefix: string;
+  scopes: string[];
+  createdAt: string;
+  expiresAt: string | null;
+}
+
+/** One MCP tool-call audit entry. */
+export interface AgentAuditEntry {
+  id: string;
+  sessionId: string;
+  actorKind: string;
+  actorFingerprint: string;
+  tool: string;
+  scopes: string[];
+  argsSummary: string | null;
+  outcome: string;
+  errorMessage: string | null;
+  createdAt: string;
+}
+
+/** One page of audit entries. */
+export interface AgentAuditPage {
+  items: AgentAuditEntry[];
+  totalCount: number;
+}
+
+/** Request to list a page of the agent audit log. */
+export interface AgentAuditQuery {
+  page: number;
+  pageSize: number;
+  tool?: string;
+}
