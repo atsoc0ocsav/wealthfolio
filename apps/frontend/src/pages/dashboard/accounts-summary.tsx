@@ -129,8 +129,8 @@ const AccountSummaryComponent = React.memo(
     const hasBadData =
       totalValue > 0 &&
       gainPercentToDisplay === null &&
-      gainAmountToDisplay !== null &&
-      gainAmountToDisplay !== 0;
+      item.totalGainLossAmountBaseCurrency !== null &&
+      item.totalGainLossAmountBaseCurrency !== 0;
     const warningMessages = hasBadData
       ? [
           item.trackingMode === "HOLDINGS"
@@ -564,7 +564,7 @@ export const AccountsSummary = React.memo(
                               item={account}
                               isLoadingValuation={isLoadingPerformance}
                               displayInAccountCurrency={
-                                account.accountCurrency === account.baseCurrency
+                                account.accountCurrency !== account.baseCurrency
                               }
                               isNested
                             />
@@ -581,7 +581,7 @@ export const AccountsSummary = React.memo(
                 key={account.accountId}
                 item={account}
                 isLoadingValuation={isLoadingPerformance}
-                displayInAccountCurrency={account.accountCurrency === account.baseCurrency}
+                displayInAccountCurrency={account.accountCurrency !== account.baseCurrency}
               />
             ))}
           </>
@@ -596,7 +596,7 @@ export const AccountsSummary = React.memo(
             key={account.accountId}
             item={account}
             isLoadingValuation={isLoadingPerformance}
-            displayInAccountCurrency={account.accountCurrency === account.baseCurrency}
+            displayInAccountCurrency={account.accountCurrency !== account.baseCurrency}
           />
         ));
       }
