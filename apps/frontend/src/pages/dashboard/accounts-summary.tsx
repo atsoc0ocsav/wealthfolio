@@ -129,8 +129,8 @@ const AccountSummaryComponent = React.memo(
     const hasBadData =
       totalValue > 0 &&
       gainPercentToDisplay === null &&
-      gainAmountToDisplay !== null &&
-      gainAmountToDisplay !== 0;
+      item.totalGainLossAmountBaseCurrency !== null &&
+      item.totalGainLossAmountBaseCurrency !== 0;
     const warningMessages = hasBadData
       ? [
           item.trackingMode === "HOLDINGS"

@@ -511,6 +511,37 @@ describe("AccountsSummary", () => {
     expect(within(row as HTMLElement).queryByText(/^gain-amount:/)).not.toBeInTheDocument();
   });
 
+  it("keeps bad-data warnings for foreign-currency accounts when only base P&L is available", () => {
+    renderAccountsSummary({
+      accounts: [createAccount({ id: "cad-account", name: "CAD Account", currency: "CAD" })],
+      valuations: [
+        createValuation({
+          accountId: "cad-account",
+          accountCurrency: "CAD",
+          baseCurrency: "USD",
+          totalValue: 150,
+          totalValueBase: 110,
+        }),
+      ],
+      performanceByAccountId: {
+        "cad-account": {
+          pnl: 10,
+          returnValue: null,
+        },
+      },
+    });
+
+    const row = screen.getByText("CAD Account").closest("a");
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getByText("value:CAD:150")).toBeInTheDocument();
+    expect(within(row as HTMLElement).queryByText(/^gain-amount:/)).not.toBeInTheDocument();
+    expect(
+      within(row as HTMLElement).getByText(
+        "Return % unavailable - activity history may be inconsistent.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("keeps the group header behavior unchanged when grouped totals have zero gain", async () => {
     const user = userEvent.setup();
 
