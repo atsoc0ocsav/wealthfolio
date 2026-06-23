@@ -26,6 +26,12 @@ describe("validation-utils", () => {
       expect(validateTickerSymbol("A".repeat(101))).toBe(false);
     });
 
+    it("bounds the full symbol, not just the first segment", () => {
+      // The 100-char limit must apply to the whole symbol including suffixes.
+      expect(validateTickerSymbol("A".repeat(100) + ".B")).toBe(false);
+      expect(validateTickerSymbol("A".repeat(98) + "-" + "B".repeat(50))).toBe(false);
+    });
+
     it("accepts underscores used by custom-provider symbols", () => {
       expect(validateTickerSymbol("GOLD_KRUGERRAND")).toBe(true);
       expect(validateTickerSymbol("XAU_1OZ")).toBe(true);
