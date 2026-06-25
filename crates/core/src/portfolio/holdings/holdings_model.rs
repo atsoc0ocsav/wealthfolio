@@ -59,6 +59,8 @@ pub struct HoldingSummary {
     pub id: String,
     pub symbol: String,
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_name: Option<String>,
     pub holding_type: HoldingType,
     pub quantity: Decimal,
     pub market_value: Decimal,

@@ -46,6 +46,9 @@ import { Input } from "@wealthfolio/ui/components/ui/input";
 
 import { useAccountMutations } from "./use-account-mutations";
 
+const CASH_ALLOCATION_DEFAULT_VALUE = "__default__";
+const CASH_FIXED_INCOME_CATEGORY_ID = "FIXED_INCOME";
+
 function getCashCategoryFromMeta(meta?: string | null): string | null {
   if (!meta) return null;
   try {
@@ -72,6 +75,19 @@ function setCashCategoryInMeta(meta: string | null | undefined, categoryId: stri
     delete parsed.allocation;
   }
   return JSON.stringify(parsed);
+}
+
+function getSelectableCashCategoryFromMeta(meta?: string | null): string {
+  const categoryId = getCashCategoryFromMeta(meta);
+  return categoryId === CASH_FIXED_INCOME_CATEGORY_ID
+    ? CASH_FIXED_INCOME_CATEGORY_ID
+    : CASH_ALLOCATION_DEFAULT_VALUE;
+}
+
+function normalizeCashCategoryInMeta(meta: string | null | undefined): string | null | undefined {
+  const categoryId = getCashCategoryFromMeta(meta);
+  if (!categoryId || categoryId === CASH_FIXED_INCOME_CATEGORY_ID) return meta;
+  return setCashCategoryInMeta(meta, null);
 }
 
 const accountTypes: ResponsiveSelectOption[] = [
@@ -118,12 +134,16 @@ export function AccountForm({ defaultValues, onSuccess = () => undefined }: Acco
 
   const { data: assetClassesTaxonomy } = useTaxonomy(isCashAccount ? "asset_classes" : null);
   const assetClassOptions = useMemo<ResponsiveSelectOption[]>(() => {
-    const defaultOption: ResponsiveSelectOption = { label: "Cash (default)", value: "__default__" };
-    if (!assetClassesTaxonomy) return [defaultOption];
-    const categories = assetClassesTaxonomy.categories
-      .filter((c) => !c.parentId && c.id !== "CASH")
-      .map((c) => ({ label: c.name, value: c.id }));
-    return [defaultOption, ...categories];
+    const fixedIncomeCategory = assetClassesTaxonomy?.categories.find(
+      (c) => !c.parentId && c.id === CASH_FIXED_INCOME_CATEGORY_ID,
+    );
+    return [
+      { label: "Cash (default)", value: CASH_ALLOCATION_DEFAULT_VALUE },
+      {
+        label: fixedIncomeCategory?.name ?? "Fixed Income",
+        value: CASH_FIXED_INCOME_CATEGORY_ID,
+      },
+    ];
   }, [assetClassesTaxonomy]);
 
   useEffect(() => {
@@ -154,20 +174,27 @@ export function AccountForm({ defaultValues, onSuccess = () => undefined }: Acco
   );
 
   function onSubmit(data: AccountFormOutput) {
+    const submitData =
+      data.accountType === AccountType.CASH
+        ? { ...data, meta: normalizeCashCategoryInMeta(data.meta) }
+        : data;
+
     // Check if this is an existing account (update) and mode is switching from HOLDINGS to TRANSACTIONS
-    const isExistingAccount = !!data.id;
+    const isExistingAccount = !!submitData.id;
     const isSwitchingFromHoldingsToTransactions =
-      !needsSetup && initialTrackingMode === "HOLDINGS" && data.trackingMode === "TRANSACTIONS";
+      !needsSetup &&
+      initialTrackingMode === "HOLDINGS" &&
+      submitData.trackingMode === "TRANSACTIONS";
 
     if (isExistingAccount && isSwitchingFromHoldingsToTransactions) {
       // Show confirmation dialog
-      setPendingFormData(data);
+      setPendingFormData(submitData);
       setShowModeConfirmation(true);
       return;
     }
 
     // Otherwise, submit directly
-    doSubmit(data);
+    doSubmit(submitData);
   }
 
   // Handle confirmation dialog actions
@@ -365,9 +392,9 @@ export function AccountForm({ defaultValues, onSuccess = () => undefined }: Acco
             <div className="flex flex-col gap-2">
               <label className="text-sm font-medium">Allocation category</label>
               <ResponsiveSelect
-                value={getCashCategoryFromMeta(form.watch("meta")) ?? "__default__"}
+                value={getSelectableCashCategoryFromMeta(form.watch("meta"))}
                 onValueChange={(v) => {
-                  const categoryId = v === "__default__" ? null : v;
+                  const categoryId = v === CASH_ALLOCATION_DEFAULT_VALUE ? null : v;
                   const updatedMeta = setCashCategoryInMeta(form.getValues("meta"), categoryId);
                   form.setValue("meta", updatedMeta, { shouldDirty: true });
                 }}

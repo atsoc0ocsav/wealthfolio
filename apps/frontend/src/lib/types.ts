@@ -727,6 +727,7 @@ export interface HoldingSummary {
   id: string;
   symbol: string;
   name?: string | null;
+  accountName?: string | null;
   holdingType: HoldingType;
   quantity: number;
   marketValue: number; // Base currency value
