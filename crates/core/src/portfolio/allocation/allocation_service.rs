@@ -111,6 +111,106 @@ impl AllocationService {
             .collect()
     }
 
+    fn load_account_names(&self, account_ids: &[String]) -> HashMap<String, String> {
+        let Some(account_service) = &self.account_service else {
+            return HashMap::new();
+        };
+        let Ok(accounts) = account_service.get_accounts_by_ids(account_ids) else {
+            return HashMap::new();
+        };
+        accounts
+            .into_iter()
+            .map(|account| (account.id, account.name))
+            .collect()
+    }
+
+    fn account_ids_for_holdings(holdings: &[Holding]) -> Vec<String> {
+        let mut account_ids = Vec::new();
+        for holding in holdings {
+            if holding.source_account_ids.is_empty() {
+                account_ids.push(holding.account_id.clone());
+            } else {
+                account_ids.extend(holding.source_account_ids.iter().cloned());
+            }
+        }
+        account_ids.sort();
+        account_ids.dedup();
+        account_ids
+    }
+
+    fn single_source_account_id(holding: &Holding) -> Option<&str> {
+        if holding.source_account_ids.is_empty() {
+            return Some(holding.account_id.as_str());
+        }
+        if holding.source_account_ids.len() == 1 {
+            return holding.source_account_ids.first().map(String::as_str);
+        }
+        None
+    }
+
+    fn cash_account_name(
+        holding: &Holding,
+        account_names: &HashMap<String, String>,
+    ) -> Option<String> {
+        if holding.holding_type != HoldingType::Cash {
+            return None;
+        }
+        Self::single_source_account_id(holding).and_then(|id| account_names.get(id).cloned())
+    }
+
+    fn merge_non_cash_detail_rows(
+        matched_values: Vec<(HoldingSummary, Decimal)>,
+    ) -> Vec<(HoldingSummary, Decimal)> {
+        let mut merged: Vec<(HoldingSummary, Decimal)> = Vec::new();
+        let mut non_cash_index_by_id: HashMap<String, usize> = HashMap::new();
+
+        for (summary, value) in matched_values {
+            if summary.holding_type == HoldingType::Cash {
+                merged.push((summary, value));
+                continue;
+            }
+
+            if let Some(&index) = non_cash_index_by_id.get(&summary.id) {
+                let (existing_summary, existing_value) = &mut merged[index];
+                existing_summary.quantity += summary.quantity;
+                existing_summary.market_value += summary.market_value;
+                if existing_summary.name.is_none() {
+                    existing_summary.name = summary.name;
+                }
+                if existing_summary.unit_price.is_none() {
+                    existing_summary.unit_price = summary.unit_price;
+                }
+                *existing_value += value;
+            } else {
+                non_cash_index_by_id.insert(summary.id.clone(), merged.len());
+                merged.push((summary, value));
+            }
+        }
+
+        merged
+    }
+
+    fn should_load_cash_detail_by_account(taxonomy_id: &str, category_id: &str) -> bool {
+        taxonomy_id == "asset_classes"
+            && (category_id == "CASH" || category_id.starts_with("CASH_"))
+    }
+
+    async fn get_unmerged_holdings_for_accounts(
+        &self,
+        account_ids: &[String],
+        base_currency: &str,
+    ) -> Result<Vec<Holding>> {
+        let mut all_holdings: Vec<Holding> = Vec::new();
+        for account_id in account_ids {
+            let holdings = self
+                .holdings_service
+                .get_holdings(account_id, base_currency)
+                .await?;
+            all_holdings.extend(holdings);
+        }
+        Ok(all_holdings)
+    }
+
     async fn get_holdings_for_allocation(
         &self,
         account_ids: &[String],
@@ -124,15 +224,8 @@ impl AllocationService {
                 .get_holdings_for_accounts(account_ids, base_currency, aggregated_account_id)
                 .await;
         }
-        let mut all_holdings: Vec<Holding> = Vec::new();
-        for account_id in account_ids {
-            let holdings = self
-                .holdings_service
-                .get_holdings(account_id, base_currency)
-                .await?;
-            all_holdings.extend(holdings);
-        }
-        Ok(all_holdings)
+        self.get_unmerged_holdings_for_accounts(account_ids, base_currency)
+            .await
     }
 
     fn rollup_to_top_level(taxonomy_id: &str) -> bool {
@@ -897,6 +990,7 @@ impl AllocationService {
                 .collect()
         };
         let assignments_by_asset = self.collect_assignments_by_asset(holdings)?;
+        let account_names = self.load_account_names(&Self::account_ids_for_holdings(holdings));
 
         let mut matched_values: Vec<(HoldingSummary, Decimal)> = Vec::new();
         for holding in holdings {
@@ -928,6 +1022,7 @@ impl AllocationService {
                     id: asset_id,
                     symbol,
                     name: Some(name),
+                    account_name: Self::cash_account_name(holding, &account_names),
                     holding_type: holding.holding_type.clone(),
                     quantity: holding.quantity,
                     market_value: matched_value,
@@ -939,6 +1034,7 @@ impl AllocationService {
             ));
         }
 
+        let matched_values = Self::merge_non_cash_detail_rows(matched_values);
         let total_matched_value: Decimal = matched_values.iter().map(|(_, value)| *value).sum();
 
         let mut summaries: Vec<HoldingSummary> = matched_values
@@ -1038,14 +1134,18 @@ impl AllocationServiceTrait for AllocationService {
         aggregated_account_id: &str,
     ) -> Result<AllocationHoldings> {
         let overrides = self.load_cash_overrides(account_ids);
-        let holdings = self
-            .get_holdings_for_allocation(
+        let holdings = if Self::should_load_cash_detail_by_account(taxonomy_id, category_id) {
+            self.get_unmerged_holdings_for_accounts(account_ids, base_currency)
+                .await?
+        } else {
+            self.get_holdings_for_allocation(
                 account_ids,
                 base_currency,
                 aggregated_account_id,
                 &overrides,
             )
-            .await?;
+            .await?
+        };
         self.compute_holdings_by_allocation_from_holdings(
             &holdings,
             base_currency,
@@ -1085,6 +1185,7 @@ impl AllocationServiceTrait for AllocationService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::accounts::{Account, AccountUpdate, NewAccount};
     use crate::portfolio::holdings::holdings_model::{Instrument, MonetaryValue};
     use crate::taxonomies::{
         AssetTaxonomyAssignment, Category, NewAssetTaxonomyAssignment, NewCategory, NewTaxonomy,
@@ -1100,6 +1201,20 @@ mod tests {
     struct StaticTaxonomies {
         taxonomies: Vec<TaxonomyWithCategories>,
         assignments_by_asset: HashMap<String, Vec<AssetTaxonomyAssignment>>,
+    }
+    struct StaticAccountService {
+        accounts: HashMap<String, Account>,
+    }
+
+    impl StaticAccountService {
+        fn new(accounts: Vec<Account>) -> Self {
+            Self {
+                accounts: accounts
+                    .into_iter()
+                    .map(|account| (account.id.clone(), account))
+                    .collect(),
+            }
+        }
     }
 
     #[async_trait]
@@ -1124,6 +1239,66 @@ mod tests {
             _: &str,
         ) -> Result<Vec<Holding>> {
             unimplemented!()
+        }
+    }
+
+    #[async_trait]
+    impl AccountServiceTrait for StaticAccountService {
+        async fn create_account(&self, _: NewAccount) -> Result<Account> {
+            unimplemented!()
+        }
+
+        async fn update_account(&self, _: AccountUpdate) -> Result<Account> {
+            unimplemented!()
+        }
+
+        async fn delete_account(&self, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+
+        fn get_account(&self, account_id: &str) -> Result<Account> {
+            self.accounts.get(account_id).cloned().ok_or_else(|| {
+                crate::Error::Database(crate::errors::DatabaseError::NotFound(format!(
+                    "Account {} not found",
+                    account_id
+                )))
+            })
+        }
+
+        fn list_accounts(
+            &self,
+            _: Option<bool>,
+            _: Option<bool>,
+            _: Option<&[String]>,
+        ) -> Result<Vec<Account>> {
+            unimplemented!()
+        }
+
+        fn get_all_accounts(&self) -> Result<Vec<Account>> {
+            unimplemented!()
+        }
+
+        fn get_active_accounts(&self) -> Result<Vec<Account>> {
+            unimplemented!()
+        }
+
+        fn get_accounts_by_ids(&self, account_ids: &[String]) -> Result<Vec<Account>> {
+            Ok(account_ids
+                .iter()
+                .filter_map(|id| self.accounts.get(id).cloned())
+                .collect())
+        }
+
+        fn get_non_archived_accounts(&self) -> Result<Vec<Account>> {
+            unimplemented!()
+        }
+
+        fn get_active_non_archived_accounts(&self) -> Result<Vec<Account>> {
+            unimplemented!()
+        }
+
+        fn get_base_currency(&self) -> Option<String> {
+            None
         }
     }
 
@@ -1765,6 +1940,211 @@ mod tests {
         assert_eq!(child.holdings[0].holding_type, HoldingType::Cash);
         assert_eq!(parent.total_value, dec!(2000));
         assert_eq!(parent.holdings[0].holding_type, HoldingType::Cash);
+    }
+
+    #[tokio::test]
+    async fn holdings_by_allocation_names_cash_rows_by_account() {
+        let account_id = "cash-account";
+        let account_name = "Emergency Fund";
+        let holdings = vec![make_cash_holding_for_account("USD", dec!(2000), account_id)];
+        let taxonomies = StaticTaxonomies {
+            taxonomies: vec![TaxonomyWithCategories {
+                taxonomy: make_taxonomy("asset_classes", "Asset Classes", true),
+                categories: vec![
+                    make_category_for_taxonomy("asset_classes", "CASH", None),
+                    make_category_for_taxonomy("asset_classes", "CASH_BANK_DEPOSITS", Some("CASH")),
+                    make_category_for_taxonomy("asset_classes", "FIXED_INCOME", None),
+                ],
+            }],
+            assignments_by_asset: HashMap::new(),
+        };
+        let account_service = StaticAccountService::new(vec![Account {
+            id: account_id.to_string(),
+            name: account_name.to_string(),
+            ..Account::default()
+        }]);
+        let svc = AllocationService::new(Arc::new(NoopHoldings), Arc::new(taxonomies))
+            .with_account_service(Arc::new(account_service));
+
+        let cash = svc
+            .compute_holdings_by_allocation_from_holdings(
+                &holdings,
+                "USD",
+                "asset_classes",
+                "CASH",
+                &HashMap::new(),
+            )
+            .await
+            .unwrap();
+        let fixed_income = svc
+            .compute_holdings_by_allocation_from_holdings(
+                &holdings,
+                "USD",
+                "asset_classes",
+                "FIXED_INCOME",
+                &HashMap::from([(account_id.to_string(), "FIXED_INCOME".to_string())]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(cash.holdings[0].account_name.as_deref(), Some(account_name));
+        assert_eq!(
+            fixed_income.holdings[0].account_name.as_deref(),
+            Some(account_name)
+        );
+    }
+
+    #[tokio::test]
+    async fn holdings_by_allocation_excludes_default_cash_from_fixed_income() {
+        let default_cash_account_id = "checking";
+        let fixed_income_cash_account_id = "business-cash";
+        let holdings = vec![
+            make_cash_holding_for_account("CAD", dec!(1000), default_cash_account_id),
+            make_cash_holding_for_account("USD", dec!(2000), fixed_income_cash_account_id),
+        ];
+        let taxonomies = StaticTaxonomies {
+            taxonomies: vec![TaxonomyWithCategories {
+                taxonomy: make_taxonomy("asset_classes", "Asset Classes", true),
+                categories: vec![
+                    make_category_for_taxonomy("asset_classes", "CASH", None),
+                    make_category_for_taxonomy("asset_classes", "CASH_BANK_DEPOSITS", Some("CASH")),
+                    make_category_for_taxonomy("asset_classes", "FIXED_INCOME", None),
+                ],
+            }],
+            assignments_by_asset: HashMap::new(),
+        };
+        let svc = AllocationService::new(Arc::new(NoopHoldings), Arc::new(taxonomies));
+        let overrides = HashMap::from([(
+            fixed_income_cash_account_id.to_string(),
+            "FIXED_INCOME".to_string(),
+        )]);
+
+        let fixed_income = svc
+            .compute_holdings_by_allocation_from_holdings(
+                &holdings,
+                "USD",
+                "asset_classes",
+                "FIXED_INCOME",
+                &overrides,
+            )
+            .await
+            .unwrap();
+        let bank_deposits = svc
+            .compute_holdings_by_allocation_from_holdings(
+                &holdings,
+                "USD",
+                "asset_classes",
+                "CASH_BANK_DEPOSITS",
+                &overrides,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(fixed_income.total_value, dec!(2000));
+        assert_eq!(fixed_income.holdings.len(), 1);
+        assert_eq!(fixed_income.holdings[0].symbol, "USD");
+
+        assert_eq!(bank_deposits.total_value, dec!(1000));
+        assert_eq!(bank_deposits.holdings.len(), 1);
+        assert_eq!(bank_deposits.holdings[0].symbol, "CAD");
+    }
+
+    #[tokio::test]
+    async fn holdings_by_allocation_excludes_cash_from_equity_when_overrides_exist() {
+        let default_cash_account_id = "checking";
+        let fixed_income_cash_account_id = "business-cash";
+        let holdings = vec![
+            make_holding("AAPL", dec!(3000)),
+            make_cash_holding_for_account("CAD", dec!(1000), default_cash_account_id),
+            make_cash_holding_for_account("USD", dec!(2000), fixed_income_cash_account_id),
+        ];
+        let taxonomies = StaticTaxonomies {
+            taxonomies: vec![TaxonomyWithCategories {
+                taxonomy: make_taxonomy("asset_classes", "Asset Classes", true),
+                categories: vec![
+                    make_category_for_taxonomy("asset_classes", "EQUITY", None),
+                    make_category_for_taxonomy("asset_classes", "CASH", None),
+                    make_category_for_taxonomy("asset_classes", "CASH_BANK_DEPOSITS", Some("CASH")),
+                    make_category_for_taxonomy("asset_classes", "FIXED_INCOME", None),
+                ],
+            }],
+            assignments_by_asset: HashMap::from([(
+                "AAPL".to_string(),
+                vec![make_assignment("AAPL", "asset_classes", "EQUITY", 10000)],
+            )]),
+        };
+        let svc = AllocationService::new(Arc::new(NoopHoldings), Arc::new(taxonomies));
+        let overrides = HashMap::from([(
+            fixed_income_cash_account_id.to_string(),
+            "FIXED_INCOME".to_string(),
+        )]);
+
+        let equity = svc
+            .compute_holdings_by_allocation_from_holdings(
+                &holdings,
+                "USD",
+                "asset_classes",
+                "EQUITY",
+                &overrides,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(equity.total_value, dec!(3000));
+        assert_eq!(equity.holdings.len(), 1);
+        assert_eq!(equity.holdings[0].symbol, "AAPL");
+        assert_ne!(equity.holdings[0].holding_type, HoldingType::Cash);
+    }
+
+    #[tokio::test]
+    async fn holdings_by_allocation_merges_duplicate_non_cash_rows() {
+        let holdings = vec![
+            Holding {
+                account_id: "account-a".to_string(),
+                ..make_holding("ZGRO", dec!(1185.01))
+            },
+            Holding {
+                account_id: "account-b".to_string(),
+                ..make_holding("ZGRO", dec!(610.83))
+            },
+        ];
+        let taxonomies = StaticTaxonomies {
+            taxonomies: vec![TaxonomyWithCategories {
+                taxonomy: make_taxonomy("asset_classes", "Asset Classes", true),
+                categories: vec![make_category_for_taxonomy(
+                    "asset_classes",
+                    "FIXED_INCOME",
+                    None,
+                )],
+            }],
+            assignments_by_asset: HashMap::from([(
+                "ZGRO".to_string(),
+                vec![make_assignment(
+                    "ZGRO",
+                    "asset_classes",
+                    "FIXED_INCOME",
+                    10000,
+                )],
+            )]),
+        };
+        let svc = AllocationService::new(Arc::new(NoopHoldings), Arc::new(taxonomies));
+
+        let fixed_income = svc
+            .compute_holdings_by_allocation_from_holdings(
+                &holdings,
+                "USD",
+                "asset_classes",
+                "FIXED_INCOME",
+                &HashMap::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(fixed_income.holdings.len(), 1);
+        assert_eq!(fixed_income.holdings[0].symbol, "ZGRO");
+        assert_eq!(fixed_income.holdings[0].quantity, dec!(2));
+        assert_eq!(fixed_income.holdings[0].market_value, dec!(1795.84));
+        assert_eq!(fixed_income.holdings[0].weight_in_category, dec!(100));
     }
 
     #[tokio::test]

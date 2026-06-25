@@ -20,7 +20,7 @@ use wealthfolio_core::{
         TrackingMode,
     },
     allocation::{AllocationHoldings, PortfolioAllocations},
-    holdings::Holding,
+    holdings::{Holding, HoldingListItem},
     income::IncomeSummary,
     lots::AssetLotView,
     performance::{
@@ -228,10 +228,28 @@ pub async fn get_holdings(
     filter: AccountScopeInput,
 ) -> Result<Vec<Holding>, String> {
     debug!("Get holdings...");
-    let base_currency = state.get_base_currency();
     let filter = filter.into_account_filter()?;
-    let resolved = resolve_scope(&filter, &state).await?;
-    let account_ids = holdings_account_ids(&state, &resolved.account_ids)?;
+    get_holdings_for_filter(state.inner().as_ref(), filter).await
+}
+
+#[tauri::command]
+pub async fn get_holdings_list(
+    state: State<'_, Arc<ServiceContext>>,
+    filter: AccountScopeInput,
+) -> Result<Vec<HoldingListItem>, String> {
+    debug!("Get holdings list...");
+    let filter = filter.into_account_filter()?;
+    let holdings = get_holdings_for_filter(state.inner().as_ref(), filter).await?;
+    Ok(holdings.into_iter().map(HoldingListItem::from).collect())
+}
+
+async fn get_holdings_for_filter(
+    state: &ServiceContext,
+    filter: AccountScope,
+) -> Result<Vec<Holding>, String> {
+    let base_currency = state.get_base_currency();
+    let resolved = resolve_scope(&filter, state).await?;
+    let account_ids = holdings_account_ids(state, &resolved.account_ids)?;
     if account_ids.is_empty() {
         return Ok(Vec::new());
     }

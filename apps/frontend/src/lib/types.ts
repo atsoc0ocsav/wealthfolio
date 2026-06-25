@@ -615,6 +615,8 @@ export interface Instrument {
   notes?: string | null;
   quoteMode: QuoteMode;
   preferredProvider?: string | null;
+  isin?: string | null;
+  exchangeMic?: string | null;
 
   // Taxonomy-based classifications
   classifications?: AssetClassifications | null;
@@ -727,6 +729,7 @@ export interface HoldingSummary {
   id: string;
   symbol: string;
   name?: string | null;
+  accountName?: string | null;
   holdingType: HoldingType;
   quantity: number;
   marketValue: number; // Base currency value
