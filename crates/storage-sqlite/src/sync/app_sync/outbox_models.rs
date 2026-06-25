@@ -8,7 +8,9 @@ use crate::custom_provider::CustomProviderDB;
 use crate::goals::{GoalDB, GoalPlanDB, GoalsAllocationDB};
 use crate::limits::ContributionLimitDB;
 use crate::market_data::QuoteDB;
-use crate::portfolio::allocation_targets::{AllocationTargetDB, AllocationTargetWeightDB};
+use crate::portfolio::allocation_targets::{
+    AllocationTargetDB, AllocationTargetWeightDB, RebalanceSellConstraintDB,
+};
 use crate::portfolio::snapshot::AccountStateSnapshotDB;
 use crate::portfolios::{PortfolioAccountDB, PortfolioDB};
 use crate::settings::model::AppSettingDB;
@@ -251,6 +253,14 @@ impl SyncOutboxModel for AllocationTargetDB {
 
 impl SyncOutboxModel for AllocationTargetWeightDB {
     const ENTITY: SyncEntity = SyncEntity::AllocationTargetWeight;
+
+    fn sync_entity_id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl SyncOutboxModel for RebalanceSellConstraintDB {
+    const ENTITY: SyncEntity = SyncEntity::RebalanceSellConstraint;
 
     fn sync_entity_id(&self) -> &str {
         &self.id

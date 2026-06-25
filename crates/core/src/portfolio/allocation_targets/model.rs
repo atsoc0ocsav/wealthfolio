@@ -157,6 +157,7 @@ pub struct AllocationTarget {
     pub min_trade_amount: String,
     pub whole_shares_only: bool,
     pub allow_sells: bool,
+    pub max_turnover_pct: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub archived_at: Option<String>,
@@ -177,6 +178,7 @@ pub struct NewAllocationTarget {
     pub min_trade_amount: Option<String>,
     pub whole_shares_only: Option<bool>,
     pub allow_sells: Option<bool>,
+    pub max_turnover_pct: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -290,6 +292,52 @@ pub struct DriftHoldingsReport {
     pub rows: Vec<DriftHoldingRow>,
 }
 
+// ── Sell constraints ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SellConstraintEntityType {
+    Asset,
+    Account,
+}
+
+impl SellConstraintEntityType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Asset => "asset",
+            Self::Account => "account",
+        }
+    }
+}
+
+impl TryFrom<&str> for SellConstraintEntityType {
+    type Error = String;
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        match s {
+            "asset" => Ok(Self::Asset),
+            "account" => Ok(Self::Account),
+            _ => Err(format!("unknown sell constraint entity type: {s}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RebalanceSellConstraint {
+    pub id: String,
+    pub target_id: String,
+    pub entity_type: SellConstraintEntityType,
+    pub entity_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewRebalanceSellConstraint {
+    pub entity_type: SellConstraintEntityType,
+    pub entity_id: String,
+}
+
 // ── Rebalance types ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -302,6 +350,10 @@ pub struct CalculateRebalancePlanInput {
     pub aggregated_account_id: String,
     #[serde(default)]
     pub scenario_mode: ScenarioMode,
+    #[serde(default)]
+    pub do_not_sell_asset_ids: Vec<String>,
+    #[serde(default)]
+    pub avoid_selling_account_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -314,6 +366,10 @@ pub enum RebalanceWarningKind {
     UnclassifiedAsset,
     /// Asset has partial taxonomy weights (<100%) — known exposure used, remainder ignored.
     PartialClassification,
+    /// A sell candidate was skipped due to a do-not-sell or avoid-selling constraint.
+    ConstraintSkippedSell,
+    /// The sell phase stopped because the turnover cap was reached.
+    TurnoverCapReached,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

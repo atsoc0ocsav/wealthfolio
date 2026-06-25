@@ -20,6 +20,7 @@ pub struct AllocationTargetDB {
     pub min_trade_amount: String,
     pub whole_shares_only: i32,
     pub allow_sells: i32,
+    pub max_turnover_pct: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub archived_at: Option<String>,
@@ -41,6 +42,7 @@ impl From<AllocationTarget> for AllocationTargetDB {
             min_trade_amount: target.min_trade_amount,
             whole_shares_only: target.whole_shares_only as i32,
             allow_sells: target.allow_sells as i32,
+            max_turnover_pct: target.max_turnover_pct,
             created_at: target.created_at,
             updated_at: target.updated_at,
             archived_at: target.archived_at,
@@ -65,6 +67,7 @@ impl TryFrom<AllocationTargetDB> for AllocationTarget {
             min_trade_amount: db.min_trade_amount,
             whole_shares_only: db.whole_shares_only != 0,
             allow_sells: db.allow_sells != 0,
+            max_turnover_pct: db.max_turnover_pct,
             created_at: db.created_at,
             updated_at: db.updated_at,
             archived_at: db.archived_at,
@@ -116,4 +119,14 @@ impl From<AllocationTargetWeightDB> for AllocationTargetWeight {
             updated_at: db.updated_at,
         }
     }
+}
+
+#[derive(Debug, Clone, Queryable, Insertable, AsChangeset, Serialize, Deserialize)]
+#[diesel(table_name = crate::schema::rebalance_sell_constraints)]
+pub struct RebalanceSellConstraintDB {
+    pub id: String,
+    pub target_id: String,
+    pub entity_type: String,
+    pub entity_id: String,
+    pub created_at: String,
 }

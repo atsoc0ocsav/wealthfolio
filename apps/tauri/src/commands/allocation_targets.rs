@@ -214,6 +214,8 @@ fn resolve_rebalance_input(
     available_cash: Decimal,
     scenario_mode: ScenarioMode,
     filter: AccountScopeInput,
+    do_not_sell_asset_ids: Vec<String>,
+    avoid_selling_account_ids: Vec<String>,
 ) -> Result<CalculateRebalancePlanInput, String> {
     let filter = filter.into_account_filter()?;
     let base_currency = state.get_base_currency();
@@ -232,6 +234,8 @@ fn resolve_rebalance_input(
         base_currency,
         aggregated_account_id: resolved.scope_id,
         scenario_mode,
+        do_not_sell_asset_ids,
+        avoid_selling_account_ids,
     })
 }
 
@@ -242,6 +246,8 @@ pub async fn calculate_rebalance_plan(
     available_cash: Decimal,
     scenario_mode: Option<ScenarioMode>,
     filter: AccountScopeInput,
+    do_not_sell_asset_ids: Option<Vec<String>>,
+    avoid_selling_account_ids: Option<Vec<String>>,
 ) -> Result<RebalancePlan, String> {
     let input = resolve_rebalance_input(
         &state,
@@ -249,6 +255,8 @@ pub async fn calculate_rebalance_plan(
         available_cash,
         scenario_mode.unwrap_or_default(),
         filter,
+        do_not_sell_asset_ids.unwrap_or_default(),
+        avoid_selling_account_ids.unwrap_or_default(),
     )?;
     state
         .rebalance_service()

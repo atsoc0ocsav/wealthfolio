@@ -208,6 +208,10 @@ struct CalculatePlanBody {
     #[serde(default)]
     scenario_mode: ScenarioMode,
     filter: AccountScope,
+    #[serde(default)]
+    do_not_sell_asset_ids: Vec<String>,
+    #[serde(default)]
+    avoid_selling_account_ids: Vec<String>,
 }
 
 fn resolve_rebalance_input(
@@ -216,6 +220,8 @@ fn resolve_rebalance_input(
     available_cash: Decimal,
     scenario_mode: ScenarioMode,
     filter: &AccountScope,
+    do_not_sell_asset_ids: Vec<String>,
+    avoid_selling_account_ids: Vec<String>,
 ) -> ApiResult<CalculateRebalancePlanInput> {
     let base_currency = state.base_currency.read().unwrap().clone();
     let resolved = state
@@ -229,6 +235,8 @@ fn resolve_rebalance_input(
         base_currency,
         aggregated_account_id: resolved.scope_id,
         scenario_mode,
+        do_not_sell_asset_ids,
+        avoid_selling_account_ids,
     })
 }
 
@@ -242,6 +250,8 @@ async fn calculate_plan(
         body.available_cash,
         body.scenario_mode,
         &body.filter,
+        body.do_not_sell_asset_ids,
+        body.avoid_selling_account_ids,
     )?;
     let plan = state.rebalance_service.calculate_plan(input).await?;
     Ok(Json(plan))

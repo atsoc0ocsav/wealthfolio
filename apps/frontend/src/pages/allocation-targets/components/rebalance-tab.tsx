@@ -988,6 +988,8 @@ const WARN_LABEL: Record<string, string> = {
   tagged_cash: "Tagged cash",
   unclassified_asset: "Unclassified",
   partial_classification: "Partial classification",
+  constraint_skipped_sell: "Sell constraint",
+  turnover_cap_reached: "Turnover cap",
 };
 
 function Warnings({ items }: { items: RebalanceWarning[] }) {
@@ -1228,6 +1230,8 @@ export function RebalanceTab({
     filter: accountScope,
     scenarioMode,
     sourceKey,
+    doNotSellAssetIds: [],
+    avoidSellingAccountIds: [],
   });
   const cachedPlan = planQuery.data ?? null;
   const hasStalePlan = !!cachedPlan && cachedPlan.sourceKey !== sourceKey;

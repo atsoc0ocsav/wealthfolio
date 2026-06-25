@@ -297,6 +297,7 @@ impl RebalanceService {
             sell_candidates.push(SellCandidate {
                 holding_id: asset_id.to_string(),
                 asset_id: repr.asset_id.clone(),
+                account_id: repr.account_id.clone(),
                 symbol: repr.symbol.clone(),
                 name: Some(repr.name.clone()),
                 price,
@@ -427,16 +428,50 @@ impl RebalanceServiceTrait for RebalanceService {
             &taxonomy_contributions.contributions,
         ));
 
+        let mut classification_warnings = classification_warnings;
+
         let sell_candidates = if profile.allow_sells
             && !matches!(
                 input.scenario_mode,
                 crate::portfolio::allocation_targets::ScenarioMode::CashFlowOnly
             ) {
-            Self::build_sell_candidates(
+            let all_sell = Self::build_sell_candidates(
                 &taxonomy_contributions.contributions,
                 &price_by_asset,
                 &quantity_by_asset,
-            )
+            );
+
+            let do_not_sell = &input.do_not_sell_asset_ids;
+            let avoid_selling = &input.avoid_selling_account_ids;
+
+            all_sell
+                .into_iter()
+                .filter(|c| {
+                    if do_not_sell.contains(&c.asset_id) {
+                        classification_warnings.push(super::model::RebalanceWarning {
+                            kind: super::model::RebalanceWarningKind::ConstraintSkippedSell,
+                            category_id: String::new(),
+                            message: format!(
+                                "Skipped selling {}: do-not-sell constraint.",
+                                c.symbol
+                            ),
+                        });
+                        return false;
+                    }
+                    if avoid_selling.contains(&c.account_id) {
+                        classification_warnings.push(super::model::RebalanceWarning {
+                            kind: super::model::RebalanceWarningKind::ConstraintSkippedSell,
+                            category_id: String::new(),
+                            message: format!(
+                                "Skipped selling {} from account: avoid-selling constraint.",
+                                c.symbol
+                            ),
+                        });
+                        return false;
+                    }
+                    true
+                })
+                .collect()
         } else {
             vec![]
         };
@@ -454,6 +489,12 @@ impl RebalanceServiceTrait for RebalanceService {
                 is_required: row.is_required,
             })
             .collect();
+
+        let max_turnover_pct = profile
+            .max_turnover_pct
+            .as_ref()
+            .and_then(|s| Decimal::from_str(s).ok())
+            .filter(|d| *d > Decimal::ZERO);
 
         let optimizer_input = RebalanceInput {
             profile: RebalanceProfile {
@@ -473,6 +514,9 @@ impl RebalanceServiceTrait for RebalanceService {
             candidates,
             sell_candidates,
             warnings: classification_warnings,
+            do_not_sell_asset_ids: input.do_not_sell_asset_ids,
+            avoid_selling_account_ids: input.avoid_selling_account_ids,
+            max_turnover_pct,
         };
 
         DriftPriorityOptimizer.plan(optimizer_input)
@@ -513,6 +557,7 @@ mod tests {
             min_trade_amount: "0".to_string(),
             whole_shares_only,
             allow_sells: false,
+            max_turnover_pct: None,
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
             archived_at: None,
@@ -913,6 +958,8 @@ mod tests {
             base_currency: "USD".to_string(),
             aggregated_account_id: "agg".to_string(),
             scenario_mode: ScenarioMode::CashFlowOnly,
+            do_not_sell_asset_ids: vec![],
+            avoid_selling_account_ids: vec![],
         }
     }
 

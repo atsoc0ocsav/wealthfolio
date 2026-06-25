@@ -285,6 +285,7 @@ function TargetEditor({
   );
   const [minTradeAmount, setMinTradeAmount] = useState(target?.minTradeAmount ?? "0");
   const [wholeSharesOnly, setWholeSharesOnly] = useState(target?.wholeSharesOnly ?? false);
+  const [maxTurnoverPct, setMaxTurnoverPct] = useState(target?.maxTurnoverPct ?? "");
   const [weights, setWeights] = useState<WeightDraft[]>([]);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -365,6 +366,7 @@ function TargetEditor({
       setRebalanceGoal(target?.rebalanceGoal ?? "nearest_band");
       setMinTradeAmount(target?.minTradeAmount ?? "0");
       setWholeSharesOnly(target?.wholeSharesOnly ?? false);
+      setMaxTurnoverPct(target?.maxTurnoverPct ?? "");
     } else {
       setTaxonomyId("asset_classes");
       setStartId("current");
@@ -377,6 +379,7 @@ function TargetEditor({
       setRebalanceGoal("nearest_band");
       setMinTradeAmount("0");
       setWholeSharesOnly(false);
+      setMaxTurnoverPct("");
     }
     setWeights([]);
     setHasUnsavedChanges(false);
@@ -471,6 +474,7 @@ function TargetEditor({
         rebalanceGoal,
         minTradeAmount: minTradeAmount === "" ? "0" : minTradeAmount,
         wholeSharesOnly,
+        maxTurnoverPct: maxTurnoverPct === "" ? null : maxTurnoverPct,
       } as const;
 
       const saved = await saveTarget.mutateAsync({
@@ -507,6 +511,7 @@ function TargetEditor({
       setRebalanceGoal(target.rebalanceGoal ?? "nearest_band");
       setMinTradeAmount(target.minTradeAmount ?? "0");
       setWholeSharesOnly(target.wholeSharesOnly ?? false);
+      setMaxTurnoverPct(target.maxTurnoverPct ?? "");
       if (savedWeightDrafts) setWeights(savedWeightDrafts);
     } else {
       setTaxonomyId("asset_classes");
@@ -783,6 +788,30 @@ function TargetEditor({
                 </div>
                 <p className="text-muted-foreground mt-2 text-[11px] leading-relaxed">
                   Trades below this amount are excluded from the plan.
+                </p>
+              </label>
+
+              <label className="mt-4 block">
+                <div className="text-foreground mb-2 text-[12.5px] font-medium">Max turnover %</div>
+                <div className="border-input bg-background focus-within:ring-ring flex h-9 items-center rounded-md border px-3 focus-within:ring-2">
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.1"
+                    value={maxTurnoverPct}
+                    onChange={(e) => {
+                      setMaxTurnoverPct(e.target.value);
+                      markDirty();
+                    }}
+                    placeholder="No limit"
+                    className="text-foreground placeholder:text-muted-foreground/60 w-full bg-transparent text-[13px] outline-none"
+                  />
+                  <span className="text-muted-foreground ml-1 text-[13px]">%</span>
+                </div>
+                <p className="text-muted-foreground mt-2 text-[11px] leading-relaxed">
+                  Cap the total portfolio value that can be sold in one plan. Leave empty for no
+                  limit.
                 </p>
               </label>
             </div>

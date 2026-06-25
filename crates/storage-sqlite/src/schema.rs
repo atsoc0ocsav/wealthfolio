@@ -747,6 +747,7 @@ diesel::table! {
         min_trade_amount -> Text,
         whole_shares_only -> Integer,
         allow_sells -> Integer,
+        max_turnover_pct -> Nullable<Text>,
         created_at -> Text,
         updated_at -> Text,
         archived_at -> Nullable<Text>,
@@ -797,6 +798,18 @@ diesel::table! {
 }
 
 diesel::joinable!(allocation_target_weights -> allocation_targets (target_id));
+
+diesel::table! {
+    rebalance_sell_constraints (id) {
+        id -> Text,
+        target_id -> Text,
+        entity_type -> Text,
+        entity_id -> Text,
+        created_at -> Text,
+    }
+}
+
+diesel::joinable!(rebalance_sell_constraints -> allocation_targets (target_id));
 
 diesel::joinable!(accounts -> platforms (platform_id));
 diesel::joinable!(activities -> accounts (account_id));
@@ -893,4 +906,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     allocation_target_weights,
     personal_access_tokens,
     mcp_audit_log,
+    rebalance_sell_constraints,
 );

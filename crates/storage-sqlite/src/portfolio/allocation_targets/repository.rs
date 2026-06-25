@@ -352,6 +352,7 @@ mod tests {
             min_trade_amount: "0".to_string(),
             whole_shares_only: false,
             allow_sells: false,
+            max_turnover_pct: None,
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
             archived_at: None,

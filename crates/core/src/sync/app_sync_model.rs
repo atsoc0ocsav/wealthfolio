@@ -102,6 +102,7 @@ pub enum SyncEntity {
     PortfolioAccount,
     AllocationTarget,
     AllocationTargetWeight,
+    RebalanceSellConstraint,
     // Spending module (wealthfolio-spending crate). Prefixed with `Spending*`
     // because the bare names (`Event`, `EventType`, `CategorizationRule`)
     // would clash with the codebase's existing event-system vocabulary
@@ -345,6 +346,7 @@ mod tests {
             SyncEntity::PortfolioAccount,
             SyncEntity::AllocationTarget,
             SyncEntity::AllocationTargetWeight,
+            SyncEntity::RebalanceSellConstraint,
             SyncEntity::SpendingSetting,
             SyncEntity::ActivityTaxonomyAssignment,
             SyncEntity::SpendingActivitySplit,

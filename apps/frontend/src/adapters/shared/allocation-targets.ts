@@ -91,11 +91,15 @@ export const calculateRebalancePlan = async (
   availableCash: number,
   filter: AccountScope,
   scenarioMode: ScenarioMode = "cash_flow_only",
+  doNotSellAssetIds: string[] = [],
+  avoidSellingAccountIds: string[] = [],
 ): Promise<RebalancePlan> => {
   return invoke<RebalancePlan>("calculate_rebalance_plan", {
     targetId,
     availableCash,
     filter,
     scenarioMode,
+    doNotSellAssetIds,
+    avoidSellingAccountIds,
   });
 };

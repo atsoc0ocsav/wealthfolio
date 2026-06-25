@@ -2452,6 +2452,7 @@ export interface AllocationTarget {
   minTradeAmount: string;
   wholeSharesOnly: boolean;
   allowSells: boolean;
+  maxTurnoverPct?: string | null;
   createdAt: string;
   updatedAt: string;
   archivedAt?: string | null;
@@ -2470,6 +2471,7 @@ export interface NewAllocationTarget {
   minTradeAmount?: string;
   wholeSharesOnly?: boolean;
   allowSells?: boolean;
+  maxTurnoverPct?: string | null;
 }
 
 export interface AllocationTargetWeight {
@@ -2557,7 +2559,9 @@ export type RebalanceWarningKind =
   | "no_buy_candidate"
   | "tagged_cash"
   | "unclassified_asset"
-  | "partial_classification";
+  | "partial_classification"
+  | "constraint_skipped_sell"
+  | "turnover_cap_reached";
 
 export interface RebalanceWarning {
   kind: RebalanceWarningKind;
