@@ -96,7 +96,7 @@ const settingsSections = [
         icon: <Icons.SparklesOutline className="size-5" />,
       },
       {
-        title: "Agent Access",
+        title: "AI Agent Access",
         href: "agent-access",
         subtitle: "MCP server and agent tokens",
         icon: <Icons.Brain className="size-5" />,
