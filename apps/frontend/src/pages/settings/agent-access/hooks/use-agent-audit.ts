@@ -1,22 +1,14 @@
-import { listAgentAuditLog, logger, purgeAgentAuditLog } from "@/adapters";
+import { type AgentAuditQuery, listAgentAuditLog, logger, purgeAgentAuditLog } from "@/adapters";
 import { QueryKeys } from "@/lib/query-keys";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@wealthfolio/ui/components/ui/use-toast";
 
-export function useAgentAudit({
-  page,
-  pageSize,
-  tool,
-}: {
-  page: number;
-  pageSize: number;
-  tool?: string;
-}) {
+export function useAgentAudit(query: AgentAuditQuery) {
   const queryClient = useQueryClient();
 
   const auditQuery = useQuery({
-    queryKey: QueryKeys.agentAuditLog(page, pageSize, tool),
-    queryFn: () => listAgentAuditLog({ page, pageSize, tool }),
+    queryKey: [QueryKeys.AGENT_AUDIT_LOG, query],
+    queryFn: () => listAgentAuditLog(query),
     placeholderData: keepPreviousData,
   });
 
@@ -43,6 +35,7 @@ export function useAgentAudit({
   return {
     items: auditQuery.data?.items ?? [],
     totalCount: auditQuery.data?.totalCount ?? 0,
+    availableTools: auditQuery.data?.availableTools ?? [],
     isLoading: auditQuery.isLoading,
     isFetching: auditQuery.isFetching,
     purgeMutation,

@@ -61,14 +61,38 @@ export const getMcpStatus = async (): Promise<McpServerStatus> => {
   }
 };
 
-export const setMcpEnabled = async (
-  enabled: boolean,
-  autoStart: boolean,
-): Promise<McpServerStatus> => {
+export const setMcpEnabled = async (enabled: boolean): Promise<McpServerStatus> => {
   try {
-    return await invoke<McpServerStatus>("mcp_set_enabled", { enabled, autoStart });
+    return await invoke<McpServerStatus>("mcp_set_enabled", { enabled });
   } catch (error) {
-    logger.error("Error updating MCP server settings.");
+    logger.error("Error updating Agent Access feature setting.");
+    throw error;
+  }
+};
+
+export const setMcpAutoStart = async (autoStart: boolean): Promise<McpServerStatus> => {
+  try {
+    return await invoke<McpServerStatus>("mcp_set_auto_start", { autoStart });
+  } catch (error) {
+    logger.error("Error updating MCP auto-start setting.");
+    throw error;
+  }
+};
+
+export const startMcp = async (): Promise<McpServerStatus> => {
+  try {
+    return await invoke<McpServerStatus>("mcp_start");
+  } catch (error) {
+    logger.error("Error starting MCP server.");
+    throw error;
+  }
+};
+
+export const stopMcp = async (): Promise<McpServerStatus> => {
+  try {
+    return await invoke<McpServerStatus>("mcp_stop");
+  } catch (error) {
+    logger.error("Error stopping MCP server.");
     throw error;
   }
 };
@@ -102,11 +126,23 @@ export const getMcpConnectionInfo = async (): Promise<McpConnectionInfo> => {
 
 export const listAgentAuditLog = async (query: AgentAuditQuery): Promise<AgentAuditPage> => {
   try {
-    const result = await invoke<{ items: McpAuditLogRow[]; totalCount: number }>(
-      "mcp_list_audit_log",
-      { page: query.page, pageSize: query.pageSize, tool: query.tool },
-    );
-    return { items: result.items.map(toAuditEntry), totalCount: result.totalCount };
+    const result = await invoke<{
+      items: McpAuditLogRow[];
+      totalCount: number;
+      availableTools: string[];
+    }>("mcp_list_audit_log", {
+      page: query.page,
+      pageSize: query.pageSize,
+      q: query.q,
+      tools: query.tools,
+      outcomes: query.outcomes,
+      actorKinds: query.actorKinds,
+    });
+    return {
+      items: result.items.map(toAuditEntry),
+      totalCount: result.totalCount,
+      availableTools: result.availableTools,
+    };
   } catch (error) {
     logger.error("Error listing agent audit log.");
     throw error;
@@ -153,11 +189,11 @@ export const createAgentAccessToken = async (
   }
 };
 
-export const revokeAgentAccessToken = async (id: string): Promise<void> => {
+export const deleteAgentAccessToken = async (id: string): Promise<void> => {
   try {
-    await invoke<void>("mcp_revoke_token", { id });
+    await invoke<void>("mcp_delete_token", { id });
   } catch (error) {
-    logger.error("Error revoking personal access token.");
+    logger.error("Error removing personal access token.");
     throw error;
   }
 };

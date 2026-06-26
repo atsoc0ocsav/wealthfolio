@@ -371,10 +371,13 @@ export {
   listAgentAccessTokens,
   listAgentAuditLog,
   purgeAgentAuditLog,
-  revokeAgentAccessToken,
+  deleteAgentAccessToken,
   rotateMcpToken,
   setMcpAuditEnabled,
   setMcpEnabled,
+  setMcpAutoStart,
+  startMcp,
+  stopMcp,
 } from "./agent-access";
 
 // AI Streaming (web-specific HTTP fetch implementation)

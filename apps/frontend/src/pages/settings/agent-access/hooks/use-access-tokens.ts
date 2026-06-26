@@ -1,9 +1,9 @@
 import {
   createAgentAccessToken,
   type CreateAgentAccessTokenInput,
+  deleteAgentAccessToken,
   listAgentAccessTokens,
   logger,
-  revokeAgentAccessToken,
 } from "@/adapters";
 import { QueryKeys } from "@/lib/query-keys";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -32,16 +32,16 @@ export function useAccessTokens() {
     },
   });
 
-  const revokeMutation = useMutation({
-    mutationFn: (id: string) => revokeAgentAccessToken(id),
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteAgentAccessToken(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [QueryKeys.AGENT_ACCESS_TOKENS] });
-      toast({ title: "Token revoked", variant: "success" });
+      toast({ title: "Token removed", variant: "success" });
     },
     onError: (error) => {
-      logger.error(`Error revoking personal access token: ${String(error)}`);
+      logger.error(`Error removing personal access token: ${String(error)}`);
       toast({
-        title: "Failed to revoke token",
+        title: "Failed to remove token",
         description: error instanceof Error ? error.message : "An unknown error occurred",
         variant: "destructive",
       });
@@ -52,6 +52,6 @@ export function useAccessTokens() {
     tokens: tokensQuery.data ?? [],
     isLoading: tokensQuery.isLoading,
     createMutation,
-    revokeMutation,
+    deleteMutation,
   };
 }

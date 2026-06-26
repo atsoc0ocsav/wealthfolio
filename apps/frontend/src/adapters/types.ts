@@ -393,6 +393,8 @@ export interface AgentAccessToken {
   id: string;
   name: string;
   tokenPrefix: string;
+  /** `sha256:<prefix>` matching audit `actorFingerprint`, for name attribution. */
+  fingerprint: string;
   scopes: string[];
   createdAt: string;
   expiresAt: string | null;
@@ -436,11 +438,20 @@ export interface AgentAuditEntry {
 export interface AgentAuditPage {
   items: AgentAuditEntry[];
   totalCount: number;
+  /** Distinct tool names across the whole log (for the Tool filter). */
+  availableTools: string[];
 }
 
-/** Request to list a page of the agent audit log. */
+/** Request to list a page of the agent audit log. All filters are server-side. */
 export interface AgentAuditQuery {
   page: number;
   pageSize: number;
-  tool?: string;
+  /** Case-insensitive substring search on the tool name. */
+  q?: string;
+  /** Exact tool names to include. */
+  tools?: string[];
+  /** Outcomes to include (success | denied | error). */
+  outcomes?: string[];
+  /** Actor kinds to include (pat | local_token | desktop_bridge). */
+  actorKinds?: string[];
 }

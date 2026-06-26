@@ -11,12 +11,15 @@ const adapterMocks = vi.hoisted(() => ({
   isWeb: true,
   getMcpStatus: vi.fn(),
   setMcpEnabled: vi.fn(),
+  setMcpAutoStart: vi.fn(),
+  startMcp: vi.fn(),
+  stopMcp: vi.fn(),
   setMcpAuditEnabled: vi.fn(),
   rotateMcpToken: vi.fn(),
   getMcpConnectionInfo: vi.fn(),
   listAgentAccessTokens: vi.fn(),
   createAgentAccessToken: vi.fn(),
-  revokeAgentAccessToken: vi.fn(),
+  deleteAgentAccessToken: vi.fn(),
   listAgentAuditLog: vi.fn(),
   purgeAgentAuditLog: vi.fn(),
   logger: { error: vi.fn() },
@@ -53,18 +56,18 @@ beforeEach(() => {
 });
 
 describe("useMcpServer", () => {
-  it("loads the status and forwards toggle changes to the adapter", async () => {
+  it("loads the status and forwards the enable toggle to the adapter", async () => {
     adapterMocks.getMcpStatus.mockResolvedValue(status);
-    adapterMocks.setMcpEnabled.mockResolvedValue({ ...status, autoStart: true });
+    adapterMocks.setMcpEnabled.mockResolvedValue({ ...status, enabled: true });
 
     const { result } = renderHook(() => useMcpServer(), { wrapper: createWrapper() });
     await waitFor(() => expect(result.current.status).toEqual(status));
 
     await act(async () => {
-      await result.current.setEnabledMutation.mutateAsync({ enabled: true, autoStart: true });
+      await result.current.setEnabledMutation.mutateAsync(true);
     });
 
-    expect(adapterMocks.setMcpEnabled).toHaveBeenCalledWith(true, true);
+    expect(adapterMocks.setMcpEnabled).toHaveBeenCalledWith(true);
   });
 
   it("forwards the audit-logging toggle to the adapter", async () => {
@@ -84,10 +87,10 @@ describe("useMcpServer", () => {
 });
 
 describe("useAccessTokens", () => {
-  it("creates and revokes tokens through the adapter", async () => {
+  it("creates and removes tokens through the adapter", async () => {
     adapterMocks.listAgentAccessTokens.mockResolvedValue([]);
     adapterMocks.createAgentAccessToken.mockResolvedValue({ token: "wfp_secret", id: "t1" });
-    adapterMocks.revokeAgentAccessToken.mockResolvedValue(undefined);
+    adapterMocks.deleteAgentAccessToken.mockResolvedValue(undefined);
 
     const { result } = renderHook(() => useAccessTokens(), { wrapper: createWrapper() });
 
@@ -97,7 +100,7 @@ describe("useAccessTokens", () => {
         expiresAt: "2026-09-09T00:00:00.000Z",
         scopes: ["accounts:read"],
       });
-      await result.current.revokeMutation.mutateAsync("t1");
+      await result.current.deleteMutation.mutateAsync("t1");
     });
 
     expect(adapterMocks.createAgentAccessToken).toHaveBeenCalledWith({
@@ -105,27 +108,30 @@ describe("useAccessTokens", () => {
       expiresAt: "2026-09-09T00:00:00.000Z",
       scopes: ["accounts:read"],
     });
-    expect(adapterMocks.revokeAgentAccessToken).toHaveBeenCalledWith("t1");
+    expect(adapterMocks.deleteAgentAccessToken).toHaveBeenCalledWith("t1");
   });
 });
 
 describe("useAgentAudit", () => {
   it("queries the requested page and purges through the adapter", async () => {
-    adapterMocks.listAgentAuditLog.mockResolvedValue({ items: [], totalCount: 0 });
+    adapterMocks.listAgentAuditLog.mockResolvedValue({
+      items: [],
+      totalCount: 0,
+      availableTools: [],
+    });
     adapterMocks.purgeAgentAuditLog.mockResolvedValue(3);
 
-    const { result } = renderHook(
-      () => useAgentAudit({ page: 2, pageSize: 25, tool: "get_holdings" }),
-      { wrapper: createWrapper() },
-    );
+    const query = {
+      page: 2,
+      pageSize: 25,
+      q: "holdings",
+      tools: ["get_holdings"],
+      outcomes: ["success"],
+      actorKinds: ["pat"],
+    };
+    const { result } = renderHook(() => useAgentAudit(query), { wrapper: createWrapper() });
 
-    await waitFor(() =>
-      expect(adapterMocks.listAgentAuditLog).toHaveBeenCalledWith({
-        page: 2,
-        pageSize: 25,
-        tool: "get_holdings",
-      }),
-    );
+    await waitFor(() => expect(adapterMocks.listAgentAuditLog).toHaveBeenCalledWith(query));
 
     await act(async () => {
       await result.current.purgeMutation.mutateAsync();

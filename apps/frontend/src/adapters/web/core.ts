@@ -398,7 +398,7 @@ export const COMMANDS: CommandMap = {
   get_agent_access_status: { method: "GET", path: "/agent-access/status" },
   list_agent_access_tokens: { method: "GET", path: "/agent-access/tokens" },
   create_agent_access_token: { method: "POST", path: "/agent-access/tokens" },
-  revoke_agent_access_token: { method: "DELETE", path: "/agent-access/tokens" },
+  delete_agent_access_token: { method: "DELETE", path: "/agent-access/tokens" },
   list_agent_audit_log: { method: "GET", path: "/agent-access/audit" },
   purge_agent_audit_log: { method: "POST", path: "/agent-access/audit/purge" },
 };
@@ -1991,21 +1991,27 @@ export const invoke = async <T>(command: string, payload?: Record<string, unknow
       body = JSON.stringify({ name, expiresAt, scopes });
       break;
     }
-    case "revoke_agent_access_token": {
+    case "delete_agent_access_token": {
       const { id } = payload as { id: string };
       url += `/${encodeURIComponent(id)}`;
       break;
     }
     case "list_agent_audit_log": {
-      const { page, pageSize, tool } = payload as {
+      const { page, pageSize, q, tools, outcomes, actorKinds } = payload as {
         page: number;
         pageSize: number;
-        tool?: string;
+        q?: string;
+        tools?: string[];
+        outcomes?: string[];
+        actorKinds?: string[];
       };
       const params = new URLSearchParams();
       params.set("page", String(page));
       params.set("pageSize", String(pageSize));
-      if (tool) params.set("tool", tool);
+      if (q) params.set("q", q);
+      if (tools?.length) params.set("tools", tools.join(","));
+      if (outcomes?.length) params.set("outcomes", outcomes.join(","));
+      if (actorKinds?.length) params.set("actorKinds", actorKinds.join(","));
       url += `?${params.toString()}`;
       break;
     }

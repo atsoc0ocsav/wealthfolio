@@ -190,6 +190,9 @@ export {
 export {
   getMcpStatus,
   setMcpEnabled,
+  setMcpAutoStart,
+  startMcp,
+  stopMcp,
   setMcpAuditEnabled,
   rotateMcpToken,
   getMcpConnectionInfo,
@@ -198,7 +201,7 @@ export {
   getAgentAccessStatus,
   listAgentAccessTokens,
   createAgentAccessToken,
-  revokeAgentAccessToken,
+  deleteAgentAccessToken,
 } from "./agent-access";
 
 // AI Streaming (Tauri Channel-based implementation)

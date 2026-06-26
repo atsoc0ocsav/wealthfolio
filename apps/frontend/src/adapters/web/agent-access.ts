@@ -46,11 +46,11 @@ export const createAgentAccessToken = async (
   }
 };
 
-export const revokeAgentAccessToken = async (id: string): Promise<void> => {
+export const deleteAgentAccessToken = async (id: string): Promise<void> => {
   try {
-    await invoke<void>("revoke_agent_access_token", { id });
+    await invoke<void>("delete_agent_access_token", { id });
   } catch (error) {
-    logger.error("Error revoking personal access token.");
+    logger.error("Error removing personal access token.");
     throw error;
   }
 };
@@ -60,7 +60,10 @@ export const listAgentAuditLog = async (query: AgentAuditQuery): Promise<AgentAu
     return await invoke<AgentAuditPage>("list_agent_audit_log", {
       page: query.page,
       pageSize: query.pageSize,
-      tool: query.tool,
+      q: query.q,
+      tools: query.tools,
+      outcomes: query.outcomes,
+      actorKinds: query.actorKinds,
     });
   } catch (error) {
     logger.error("Error listing agent audit log.");
@@ -83,7 +86,16 @@ export const purgeAgentAuditLog = async (): Promise<number> => {
 export const getMcpStatus = (): Promise<McpServerStatus> =>
   Promise.reject(new Error("The MCP server runs inside the desktop app"));
 
-export const setMcpEnabled = (_enabled: boolean, _autoStart: boolean): Promise<McpServerStatus> =>
+export const setMcpEnabled = (_enabled: boolean): Promise<McpServerStatus> =>
+  Promise.reject(new Error("The MCP server runs inside the desktop app"));
+
+export const setMcpAutoStart = (_autoStart: boolean): Promise<McpServerStatus> =>
+  Promise.reject(new Error("The MCP server runs inside the desktop app"));
+
+export const startMcp = (): Promise<McpServerStatus> =>
+  Promise.reject(new Error("The MCP server runs inside the desktop app"));
+
+export const stopMcp = (): Promise<McpServerStatus> =>
   Promise.reject(new Error("The MCP server runs inside the desktop app"));
 
 export const rotateMcpToken = (): Promise<McpRotatedToken> =>

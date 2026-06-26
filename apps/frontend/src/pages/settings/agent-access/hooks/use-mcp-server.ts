@@ -5,7 +5,10 @@ import {
   logger,
   rotateMcpToken,
   setMcpAuditEnabled,
+  setMcpAutoStart,
   setMcpEnabled,
+  startMcp,
+  stopMcp,
   type McpConnectionInfo,
   type McpRotatedToken,
   type McpServerStatus,
@@ -29,13 +32,51 @@ export function useMcpServer() {
   };
 
   const setEnabledMutation = useMutation({
-    mutationFn: ({ enabled, autoStart }: { enabled: boolean; autoStart: boolean }) =>
-      setMcpEnabled(enabled, autoStart),
+    mutationFn: (enabled: boolean) => setMcpEnabled(enabled),
     onSuccess: applyStatus,
     onError: (error) => {
-      logger.error(`Error updating MCP server settings: ${String(error)}`);
+      logger.error(`Error updating Agent Access: ${String(error)}`);
       toast({
-        title: "Failed to update MCP server",
+        title: "Failed to update Agent Access",
+        description: error instanceof Error ? error.message : "An unknown error occurred",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const setAutoStartMutation = useMutation({
+    mutationFn: (autoStart: boolean) => setMcpAutoStart(autoStart),
+    onSuccess: applyStatus,
+    onError: (error) => {
+      logger.error(`Error updating MCP auto-start: ${String(error)}`);
+      toast({
+        title: "Failed to update auto-start",
+        description: error instanceof Error ? error.message : "An unknown error occurred",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const startMutation = useMutation({
+    mutationFn: () => startMcp(),
+    onSuccess: applyStatus,
+    onError: (error) => {
+      logger.error(`Error starting MCP server: ${String(error)}`);
+      toast({
+        title: "Failed to start server",
+        description: error instanceof Error ? error.message : "An unknown error occurred",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const stopMutation = useMutation({
+    mutationFn: () => stopMcp(),
+    onSuccess: applyStatus,
+    onError: (error) => {
+      logger.error(`Error stopping MCP server: ${String(error)}`);
+      toast({
+        title: "Failed to stop server",
         description: error instanceof Error ? error.message : "An unknown error occurred",
         variant: "destructive",
       });
@@ -74,6 +115,9 @@ export function useMcpServer() {
     isError: statusQuery.isError,
     refetchStatus: statusQuery.refetch,
     setEnabledMutation,
+    setAutoStartMutation,
+    startMutation,
+    stopMutation,
     setAuditEnabledMutation,
     rotateTokenMutation,
   };
