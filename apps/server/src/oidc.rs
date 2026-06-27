@@ -47,6 +47,14 @@ const ID_COOKIE_PATH: &str = "/api/v1/auth/oidc";
 /// ~4 KB per-cookie limit browsers enforce; oversized tokens fall back to local
 /// logout rather than being silently dropped.
 const ID_COOKIE_MAX_VALUE_LEN: usize = 3500;
+/// Lifetime of the `wf_oidc_id` logout-hint cookie. Decoupled from the session
+/// TTL on purpose: `wf_session` slides (it is re-issued past 50% of its TTL in
+/// `require_jwt`), but this cookie is set only once at the callback. Pinning it
+/// to the initial session TTL would let it expire under an actively-refreshed
+/// session, after which logout would silently degrade to local-only. A long
+/// fixed lifetime keeps the `id_token_hint` available for the life of the
+/// session; an expired hint is still accepted by IdPs for RP-Initiated Logout.
+const ID_COOKIE_TTL_SECS: u64 = 30 * 24 * 60 * 60; // 30 days
 
 /// Parsed `WF_OIDC_*` configuration. Present iff issuer + client id are set.
 #[derive(Clone, Debug)]
@@ -89,14 +97,10 @@ impl OidcConfig {
                     .unwrap_or_else(|| vec!["openid".into(), "email".into(), "profile".into()]);
                 let allowed_emails = csv_list("WF_OIDC_ALLOWED_EMAILS");
                 let allowed_subs = csv_list("WF_OIDC_ALLOWED_SUBS");
-
-                if allowed_emails.is_empty() && allowed_subs.is_empty() {
-                    tracing::warn!(
-                        "OIDC is enabled WITHOUT an allowlist: any user your IdP authenticates \
-                         will be granted full access to this instance. Set WF_OIDC_ALLOWED_EMAILS \
-                         or WF_OIDC_ALLOWED_SUBS to restrict access."
-                    );
-                }
+                // NOTE: the "no allowlist => open access" warning is emitted in
+                // `OidcManager::discover`, not here. `from_env` runs before
+                // `init_tracing()` in `main`, so a warning logged here would be
+                // dropped (no subscriber installed yet).
 
                 // Default true; only "false"/"0"/"no" disable RP-initiated logout.
                 let rp_logout = env_nonempty("WF_OIDC_RP_LOGOUT")
@@ -164,6 +168,16 @@ impl OidcManager {
             .map_err(|e| anyhow::anyhow!("OIDC discovery failed: {e}"))?;
         let redirect_url = RedirectUrl::new(config.redirect_url.clone())
             .map_err(|e| anyhow::anyhow!("Invalid WF_OIDC_REDIRECT_URL: {e}"))?;
+
+        // Logged here (not in `from_env`) because `from_env` runs before tracing
+        // is initialized in `main`, where the warning would be silently dropped.
+        if config.allowed_emails.is_empty() && config.allowed_subs.is_empty() {
+            tracing::warn!(
+                "OIDC is enabled WITHOUT an allowlist: any user your IdP authenticates \
+                 will be granted full access to this instance. Set WF_OIDC_ALLOWED_EMAILS \
+                 or WF_OIDC_ALLOWED_SUBS to restrict access."
+            );
+        }
 
         // `end_session_endpoint` belongs to the RP-Initiated Logout spec and is
         // not part of CoreProviderMetadata, so read it from the discovery doc
@@ -402,7 +416,7 @@ pub async fn oidc_callback(
         return error_redirect("oidc_internal");
     };
     let secure = cookie_secure(&state, &headers);
-    let Ok((session_cookie, ttl_secs)) = auth.issue_session_cookie(&headers) else {
+    let Ok((session_cookie, _ttl_secs)) = auth.issue_session_cookie(&headers) else {
         return error_redirect("oidc_internal");
     };
 
@@ -421,9 +435,11 @@ pub async fn oidc_callback(
     if oidc.rp_logout && oidc.end_session_endpoint.is_some() {
         match encrypt_bytes(&oidc.encryption_key, id_token_str.as_bytes()) {
             Ok(encrypted_id) if encrypted_id.len() <= ID_COOKIE_MAX_VALUE_LEN => {
-                if let Ok(val) =
-                    HeaderValue::from_str(&build_id_cookie(&encrypted_id, ttl_secs, secure))
-                {
+                if let Ok(val) = HeaderValue::from_str(&build_id_cookie(
+                    &encrypted_id,
+                    ID_COOKIE_TTL_SECS,
+                    secure,
+                )) {
                     out.append(SET_COOKIE, val);
                 }
             }
