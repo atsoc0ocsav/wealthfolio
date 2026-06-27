@@ -284,13 +284,17 @@ All configuration is done via environment variables in `.env.web`.
     registered in the IdP, e.g. `https://your.host/api/v1/auth/oidc/callback`
   - `WF_OIDC_SCOPES` - **Optional** space-separated scopes (default
     `openid email profile`)
-  - `WF_OIDC_ALLOWED_EMAILS` / `WF_OIDC_ALLOWED_SUBS` - **Optional**
-    comma-separated allowlists matched against the ID token's `email` / `sub`
-    claims. With neither set, any IdP-authenticated user is allowed (a warning
-    is logged) — set an allowlist when using a shared IdP. An `email` is only
-    honored when the IdP asserts `email_verified=true`; `WF_OIDC_ALLOWED_SUBS`
-    is the stronger control (stable, issuer-scoped) and is recommended on
-    shared/multi-tenant IdPs.
+  - `WF_OIDC_ALLOWED_EMAILS` / `WF_OIDC_ALLOWED_SUBS` - comma-separated
+    allowlists matched against the ID token's `email` / `sub` claims. With
+    neither set, the server **refuses to start** unless `WF_OIDC_ALLOW_ANY=true`
+    is also set — a missing allowlist must never silently grant every IdP user
+    access. An `email` is only honored when the IdP asserts
+    `email_verified=true`; `WF_OIDC_ALLOWED_SUBS` is the stronger control
+    (stable, issuer-scoped) and is recommended on shared/multi-tenant IdPs.
+  - `WF_OIDC_ALLOW_ANY` - **Optional**, default `false`. Set to `true` to allow
+    **any** user the IdP authenticates when no allowlist is configured. Only
+    safe on a dedicated single-user IdP; on a shared/multi-tenant IdP this
+    grants everyone access. A warning is logged at startup when enabled.
   - `WF_OIDC_POST_LOGOUT_REDIRECT_URL` - **Optional**. When the IdP advertises
     an `end_session_endpoint`, sign-out also ends the IdP session (RP-Initiated
     Logout); otherwise logout is local-only. Set this to land back on the app

@@ -97,8 +97,26 @@ impl OidcConfig {
                     .unwrap_or_else(|| vec!["openid".into(), "email".into(), "profile".into()]);
                 let allowed_emails = csv_list("WF_OIDC_ALLOWED_EMAILS");
                 let allowed_subs = csv_list("WF_OIDC_ALLOWED_SUBS");
-                // NOTE: the "no allowlist => open access" warning is emitted in
-                // `OidcManager::discover`, not here. `from_env` runs before
+
+                // Fail closed: an empty allowlist grants every user the IdP
+                // authenticates full access to this instance, which is dangerous
+                // on a shared / multi-tenant / self-signup IdP. Require an explicit
+                // opt-in so a missing allowlist can never silently mean "open".
+                // Panicking here matches the other partial-config failures above
+                // and prints to stderr regardless of tracing being initialized.
+                let allow_any = env_nonempty("WF_OIDC_ALLOW_ANY")
+                    .map(|v| matches!(v.to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
+                    .unwrap_or(false);
+                if allowed_emails.is_empty() && allowed_subs.is_empty() && !allow_any {
+                    panic!(
+                        "OIDC is enabled without an allowlist. Set WF_OIDC_ALLOWED_EMAILS \
+                         and/or WF_OIDC_ALLOWED_SUBS to restrict who may sign in. To \
+                         intentionally allow ANY user your IdP authenticates (only safe on \
+                         a dedicated single-user IdP), set WF_OIDC_ALLOW_ANY=true."
+                    );
+                }
+                // The "running with an open allowlist" warning is emitted in
+                // `OidcManager::discover`, not here: `from_env` runs before
                 // `init_tracing()` in `main`, so a warning logged here would be
                 // dropped (no subscriber installed yet).
 
@@ -169,13 +187,14 @@ impl OidcManager {
         let redirect_url = RedirectUrl::new(config.redirect_url.clone())
             .map_err(|e| anyhow::anyhow!("Invalid WF_OIDC_REDIRECT_URL: {e}"))?;
 
-        // Logged here (not in `from_env`) because `from_env` runs before tracing
-        // is initialized in `main`, where the warning would be silently dropped.
+        // Reachable only when WF_OIDC_ALLOW_ANY=true (otherwise `from_env` refuses
+        // to start with an empty allowlist). Logged here, not in `from_env`, which
+        // runs before tracing is initialized in `main` and would drop the warning.
         if config.allowed_emails.is_empty() && config.allowed_subs.is_empty() {
             tracing::warn!(
-                "OIDC is enabled WITHOUT an allowlist: any user your IdP authenticates \
-                 will be granted full access to this instance. Set WF_OIDC_ALLOWED_EMAILS \
-                 or WF_OIDC_ALLOWED_SUBS to restrict access."
+                "OIDC allowlist is disabled (WF_OIDC_ALLOW_ANY=true): ANY user your IdP \
+                 authenticates will be granted full access to this instance. Set \
+                 WF_OIDC_ALLOWED_EMAILS or WF_OIDC_ALLOWED_SUBS to restrict access."
             );
         }
 

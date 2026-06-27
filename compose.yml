@@ -50,9 +50,14 @@ services:
       WF_OIDC_REDIRECT_URL: "${WF_OIDC_REDIRECT_URL:-}"
       # Optional space-separated scopes (default: "openid email profile")
       WF_OIDC_SCOPES: "${WF_OIDC_SCOPES:-}"
-      # Restrict access on a shared IdP (comma-separated); otherwise any IdP user is allowed.
+      # Allowlist (comma-separated). With NEITHER set the server refuses to start
+      # unless WF_OIDC_ALLOW_ANY=true is set — a missing allowlist must not silently
+      # grant every IdP user access.
       WF_OIDC_ALLOWED_EMAILS: "${WF_OIDC_ALLOWED_EMAILS:-}"
       WF_OIDC_ALLOWED_SUBS: "${WF_OIDC_ALLOWED_SUBS:-}"
+      # Set "true" to allow ANY IdP-authenticated user when no allowlist is set
+      # (only safe on a dedicated single-user IdP).
+      WF_OIDC_ALLOW_ANY: "${WF_OIDC_ALLOW_ANY:-}"
       # Logout ends the IdP session too when supported (RP-Initiated Logout). To return
       # to the app afterward, set this AND register it in the IdP; otherwise omit it.
       WF_OIDC_POST_LOGOUT_REDIRECT_URL: "${WF_OIDC_POST_LOGOUT_REDIRECT_URL:-}"

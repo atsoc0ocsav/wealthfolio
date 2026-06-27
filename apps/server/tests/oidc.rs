@@ -76,6 +76,9 @@ fn set_oidc_env(issuer: &str, db_path: std::path::PathBuf) {
         "http://localhost:8088/api/v1/auth/oidc/callback",
     );
     std::env::set_var("WF_OIDC_SCOPES", "openid email");
+    // No allowlist is configured here, so explicitly opt into open access;
+    // otherwise `Config::from_env` fails closed (see WF_OIDC_ALLOW_ANY).
+    std::env::set_var("WF_OIDC_ALLOW_ANY", "true");
 }
 
 fn cleanup_env() {
@@ -87,6 +90,7 @@ fn cleanup_env() {
         "WF_OIDC_CLIENT_ID",
         "WF_OIDC_REDIRECT_URL",
         "WF_OIDC_SCOPES",
+        "WF_OIDC_ALLOW_ANY",
     ] {
         std::env::remove_var(key);
     }
