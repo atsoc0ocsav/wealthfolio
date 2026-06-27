@@ -282,7 +282,12 @@ impl AgentTool for CreateCategorizationRule {
     }
 
     fn required_scopes(&self) -> &'static [AgentScope] {
-        &[AgentScope::ClassificationSuggest]
+        // Reads the taxonomy tree to resolve/validate the category, so it
+        // requires classification:read alongside classification:suggest.
+        &[
+            AgentScope::ClassificationRead,
+            AgentScope::ClassificationSuggest,
+        ]
     }
 
     fn access_level(&self) -> AgentToolAccess {

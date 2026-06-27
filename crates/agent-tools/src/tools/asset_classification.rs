@@ -270,7 +270,13 @@ impl AgentTool for PrepareAssetClassification {
     }
 
     fn required_scopes(&self) -> &'static [AgentScope] {
-        &[AgentScope::ClassificationSuggest]
+        // Returns existing asset classifications (current + candidate
+        // assignments), so it requires classification:read in addition to
+        // classification:suggest — a suggest-only token must not read them.
+        &[
+            AgentScope::ClassificationRead,
+            AgentScope::ClassificationSuggest,
+        ]
     }
 
     fn access_level(&self) -> AgentToolAccess {

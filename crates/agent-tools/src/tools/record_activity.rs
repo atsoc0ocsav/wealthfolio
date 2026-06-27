@@ -689,11 +689,19 @@ impl AgentTool for RecordActivity {
     }
 
     fn required_scopes(&self) -> &'static [AgentScope] {
-        &[AgentScope::ActivitiesDraft]
+        // Returns the account list (ids, names, currencies, types) for
+        // resolution, so it needs accounts:read in addition to activities:draft.
+        &[AgentScope::AccountsRead, AgentScope::ActivitiesDraft]
     }
 
     fn access_level(&self) -> AgentToolAccess {
         AgentToolAccess::Draft
+    }
+
+    fn sanitize_args_for_audit(&self, _args: &serde_json::Value) -> serde_json::Value {
+        // The args carry the draft's financial details (symbol, quantity,
+        // amount, fee, account, notes); never persist them in the audit log.
+        serde_json::json!("[redacted]")
     }
 
     async fn call(
@@ -757,5 +765,17 @@ mod tests {
         // Missing quantity or price
         assert_eq!(compute_amount(Some(10.0), None, None, None), None);
         assert_eq!(compute_amount(None, Some(100.0), None, None), None);
+    }
+
+    #[test]
+    fn audit_redaction_drops_draft_details() {
+        let args = serde_json::json!({
+            "activityType": "BUY", "symbol": "AAPL", "quantity": 10.0,
+            "amount": 1502.5, "account": "Brokerage", "notes": "secret"
+        });
+        assert_eq!(
+            RecordActivity.sanitize_args_for_audit(&args),
+            serde_json::json!("[redacted]")
+        );
     }
 }

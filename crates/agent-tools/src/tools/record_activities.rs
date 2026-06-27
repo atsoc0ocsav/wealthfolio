@@ -228,11 +228,23 @@ impl AgentTool for RecordActivities {
     }
 
     fn required_scopes(&self) -> &'static [AgentScope] {
-        &[AgentScope::ActivitiesDraft]
+        // Prefetches the account list for resolution, so it needs
+        // accounts:read in addition to activities:draft.
+        &[AgentScope::AccountsRead, AgentScope::ActivitiesDraft]
     }
 
     fn access_level(&self) -> AgentToolAccess {
         AgentToolAccess::Draft
+    }
+
+    fn sanitize_args_for_audit(&self, args: &serde_json::Value) -> serde_json::Value {
+        // Never persist the draft rows' financial details in the audit log.
+        let count = args
+            .get("activities")
+            .and_then(|a| a.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        serde_json::json!(format!("[{count} activities]"))
     }
 
     async fn call(
@@ -245,5 +257,21 @@ impl AgentTool for RecordActivities {
         Ok(AgentToolResult {
             content: serde_json::to_value(output)?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audit_redaction_counts_drafts() {
+        let args = serde_json::json!({
+            "activities": [ { "activityType": "BUY" }, { "activityType": "SELL" } ]
+        });
+        assert_eq!(
+            RecordActivities.sanitize_args_for_audit(&args),
+            serde_json::json!("[2 activities]")
+        );
     }
 }

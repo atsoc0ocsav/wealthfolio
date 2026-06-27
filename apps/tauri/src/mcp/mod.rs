@@ -111,6 +111,11 @@ pub fn remove_stale_lock(app: &AppHandle) {
 pub async fn start_server(app: &AppHandle, ctx: &ServiceContext) -> Result<(), String> {
     #[cfg(desktop)]
     {
+        // Respect the master feature flag: never open the loopback server while
+        // AI Agent Access is disabled, even if a command reaches this directly.
+        if !flags(ctx).0 {
+            return Err("Enable AI Agent Access before starting the server".to_string());
+        }
         let state = app.state::<McpServerState>();
         let _ops = state.ops.lock().await;
         start_server_locked(app, ctx).await

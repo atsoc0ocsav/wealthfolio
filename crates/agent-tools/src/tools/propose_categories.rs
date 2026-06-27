@@ -275,10 +275,11 @@ impl AgentTool for ProposeCategories {
     }
 
     fn required_scopes(&self) -> &'static [AgentScope] {
-        // Reads cash-activity rows to propose categories, so it requires
-        // activities:read alongside classification:suggest.
+        // Returns cash-activity rows AND the taxonomy tree, so it requires
+        // activities:read and classification:read alongside classification:suggest.
         &[
             AgentScope::ActivitiesRead,
+            AgentScope::ClassificationRead,
             AgentScope::ClassificationSuggest,
         ]
     }
