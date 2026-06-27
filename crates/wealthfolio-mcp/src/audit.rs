@@ -40,8 +40,10 @@ pub struct McpAuditEntry {
 
 /// Persistence hook implemented by runtime hosts.
 ///
-/// `record` must be cheap to call from the request path; the handler
-/// invokes it via `tokio::spawn` so slow storage never blocks responses.
+/// The handler `await`s `record` before returning the tool result, so the
+/// audit row is durable before the caller sees the outcome. Keep it cheap;
+/// for writes the small added latency is worth not losing the trail if the
+/// process exits right after a mutation.
 #[async_trait::async_trait]
 pub trait AuditSink: Send + Sync {
     async fn record(&self, entry: McpAuditEntry);

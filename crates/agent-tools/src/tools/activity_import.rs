@@ -217,20 +217,17 @@ fn to_import_rows(rows: &[ActivityImportRow]) -> Result<Vec<ActivityImport>, Age
         .collect()
 }
 
-/// Replace the `activities` array in audit args with just its length — never
-/// persist the user's financial rows in the audit log.
+/// Summarize audit args to just the row count. Built as an allowlist (a fresh
+/// object with only the count) rather than cloning the input and replacing the
+/// `activities` key — otherwise an agent could smuggle sensitive data into the
+/// audit log via any extra top-level field, which would survive the redaction.
 fn redact_activities(args: &serde_json::Value) -> serde_json::Value {
-    let mut value = args.clone();
-    if let Some(obj) = value.as_object_mut() {
-        if let Some(count) = obj
-            .get("activities")
-            .and_then(|a| a.as_array())
-            .map(|a| a.len())
-        {
-            obj.insert("activities".into(), json!(format!("[{count} rows]")));
-        }
-    }
-    value
+    let count = args
+        .get("activities")
+        .and_then(|a| a.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    json!({ "activities": format!("[{count} rows]") })
 }
 
 // ── get_import_mapping ──────────────────────────────────────────────────
@@ -329,7 +326,10 @@ impl AgentTool for PrepareActivityImport {
     }
 
     fn required_scopes(&self) -> &'static [AgentScope] {
-        &[AgentScope::ActivitiesDraft]
+        // Duplicate detection reads existing stored activities (returning their
+        // ids), so this needs read access alongside draft — otherwise a
+        // draft-only token could probe for the existence of stored activities.
+        &[AgentScope::ActivitiesRead, AgentScope::ActivitiesDraft]
     }
 
     fn access_level(&self) -> AgentToolAccess {
@@ -406,7 +406,13 @@ impl AgentTool for CommitActivityImport {
     }
 
     fn required_scopes(&self) -> &'static [AgentScope] {
-        &[AgentScope::ActivitiesDraft, AgentScope::ActivitiesWrite]
+        // Runs the same duplicate-detection read as `prepare_activity_import`
+        // before importing, so it needs read in addition to draft + write.
+        &[
+            AgentScope::ActivitiesRead,
+            AgentScope::ActivitiesDraft,
+            AgentScope::ActivitiesWrite,
+        ]
     }
 
     fn access_level(&self) -> AgentToolAccess {
@@ -549,5 +555,19 @@ mod tests {
         let args = json!({ "activities": [ {"a": 1}, {"a": 2}, {"a": 3} ] });
         let redacted = redact_activities(&args);
         assert_eq!(redacted["activities"], json!("[3 rows]"));
+    }
+
+    #[test]
+    fn audit_redaction_drops_unknown_keys() {
+        // An agent must not be able to smuggle sensitive data into the audit
+        // log via an extra top-level field; only the row-count summary survives.
+        let args = json!({
+            "activities": [ {"a": 1} ],
+            "note": "SSN 123-45-6789",
+        });
+        let redacted = redact_activities(&args);
+        assert_eq!(redacted["activities"], json!("[1 rows]"));
+        assert!(redacted.get("note").is_none());
+        assert_eq!(redacted.as_object().unwrap().len(), 1);
     }
 }

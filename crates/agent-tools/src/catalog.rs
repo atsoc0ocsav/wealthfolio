@@ -240,6 +240,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn commit_drafts_rejects_oversized_batch_before_touching_env() {
+        // A write-scoped but oversized batch must be rejected by the tool's
+        // size cap before any service is reached — PanicEnv proves no write
+        // (or any service access) is attempted.
+        let catalog = AgentToolCatalog::mcp_catalog();
+        let granted = AgentScopeSet::from_strs(["activities:draft", "activities:write"]);
+        // Comfortably over the cap (100) regardless of small future tweaks.
+        let drafts: Vec<_> = (0..256)
+            .map(|_| {
+                serde_json::json!({
+                    "activityType": "BUY",
+                    "activityDate": "2024-01-15",
+                    "currency": "USD",
+                    "accountId": "a"
+                })
+            })
+            .collect();
+        let err = catalog
+            .execute(
+                Arc::new(PanicEnv),
+                &granted,
+                "commit_activity_drafts",
+                serde_json::json!({ "drafts": drafts }),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, AgentToolError::InvalidInput(_)),
+            "oversized batch should be rejected with InvalidInput, got: {err}"
+        );
+    }
+
+    #[tokio::test]
     async fn execute_returns_not_found_for_unknown_tool() {
         let catalog = AgentToolCatalog::v1_read_tools();
         let err = catalog

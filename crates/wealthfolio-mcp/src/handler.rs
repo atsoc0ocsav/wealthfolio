@@ -71,10 +71,12 @@ impl WealthfolioMcpHandler {
             .to_string()
     }
 
-    fn audit(&self, entry: McpAuditEntry) {
+    /// Persist an audit entry, awaited before the tool result returns so the
+    /// row is durable — a mutation must never commit without its audit trail
+    /// (e.g. if the process exits right after the call).
+    async fn audit(&self, entry: McpAuditEntry) {
         if let Some(sink) = &self.audit {
-            let sink = sink.clone();
-            tokio::spawn(async move { sink.record(entry).await });
+            sink.record(entry).await;
         }
     }
 
@@ -165,7 +167,8 @@ impl ServerHandler for WealthfolioMcpHandler {
                 serde_json::Value::Null,
                 AuditOutcome::Error,
                 Some(message.clone()),
-            ));
+            ))
+            .await;
             return Err(McpError::invalid_params(message, None));
         };
 
@@ -189,7 +192,8 @@ impl ServerHandler for WealthfolioMcpHandler {
                     args_summary,
                     AuditOutcome::Success,
                     None,
-                ));
+                ))
+                .await;
                 let text =
                     serde_json::to_string(&output.content).unwrap_or_else(|_| "{}".to_string());
                 let mut result = CallToolResult::success(vec![Content::text(text)]);
@@ -205,7 +209,8 @@ impl ServerHandler for WealthfolioMcpHandler {
                     args_summary,
                     AuditOutcome::Denied,
                     Some(message.clone()),
-                ));
+                ))
+                .await;
                 Ok(CallToolResult::error(vec![Content::text(message)]))
             }
             Err(err) => {
@@ -217,7 +222,8 @@ impl ServerHandler for WealthfolioMcpHandler {
                     args_summary,
                     AuditOutcome::Error,
                     Some(message.clone()),
-                ));
+                ))
+                .await;
                 Ok(CallToolResult::error(vec![Content::text(message)]))
             }
         }

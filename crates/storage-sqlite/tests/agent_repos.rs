@@ -134,6 +134,40 @@ async fn audit_insert_page_filter_purge() {
 }
 
 #[tokio::test]
+async fn audit_tool_search_treats_underscore_literally() {
+    let (_dir, pool, writer) = setup();
+    let repo = McpAuditRepository::new(pool, writer);
+
+    // `get_holdings` has a literal underscore; `getXholdings` differs only at
+    // that position. An unescaped LIKE `%get_holdings%` would treat `_` as a
+    // wildcard and match both — escaping must keep the search literal.
+    repo.insert(audit_entry("get_holdings", "success"))
+        .await
+        .unwrap();
+    repo.insert(audit_entry("getXholdings", "success"))
+        .await
+        .unwrap();
+
+    let search = "get_holdings".to_string();
+    let (rows, total) = repo
+        .list_paged(
+            1,
+            10,
+            &AuditFilter {
+                tool_search: Some(&search),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        total, 1,
+        "underscore must match literally, not as a wildcard"
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].tool, "get_holdings");
+}
+
+#[tokio::test]
 async fn audit_rejects_invalid_outcome() {
     let (_dir, pool, writer) = setup();
     let repo = McpAuditRepository::new(pool, writer);

@@ -66,6 +66,9 @@ export function PatCreateDialog({
   };
 
   const toggleScope = (key: ScopeKey) => {
+    // Store only the user's raw selection; dependencies (e.g. write ⇒ draft)
+    // are derived in `selectedScopes`. Baking them into state here would leave
+    // `activities:draft` stuck on after `activities:write` is unchecked.
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(key)) {
@@ -73,7 +76,7 @@ export function PatCreateDialog({
       } else {
         next.add(key);
       }
-      return new Set(applyScopeDependencies(next));
+      return next;
     });
   };
 

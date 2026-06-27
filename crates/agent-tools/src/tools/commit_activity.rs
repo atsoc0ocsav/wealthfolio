@@ -23,26 +23,29 @@ use crate::scope::AgentScope;
 use crate::tool::{AgentTool, AgentToolAccess, AgentToolError, AgentToolResult};
 use crate::tools::record_activity::ActivityDraft;
 
+/// Max drafts per `commit_activity_drafts` call. Mirrors the `record_activities`
+/// batch cap (these drafts come from there), so a buggy or hostile client with
+/// write scope can't trigger an unbounded one-by-one write.
+const MAX_COMMIT_DRAFTS: usize = 100;
+
 /// Drop the draft payload(s) from audit args — never persist amounts, account
-/// ids, symbols, or notes in `mcp_audit_log`.
+/// ids, symbols, or notes in `mcp_audit_log`. Built as an allowlist (fresh
+/// object) so an extra top-level field an agent attaches can't slip through
+/// unredacted.
 fn redact_drafts(args: &serde_json::Value) -> serde_json::Value {
-    let mut value = args.clone();
-    if let Some(obj) = value.as_object_mut() {
+    let mut redacted = serde_json::Map::new();
+    if let Some(obj) = args.as_object() {
         if obj.contains_key("draft") {
-            obj.insert("draft".to_string(), serde_json::json!("[redacted]"));
+            redacted.insert("draft".to_string(), serde_json::json!("[redacted]"));
         }
-        if let Some(count) = obj
-            .get("drafts")
-            .and_then(|d| d.as_array())
-            .map(|a| a.len())
-        {
-            obj.insert(
+        if let Some(drafts) = obj.get("drafts").and_then(|d| d.as_array()) {
+            redacted.insert(
                 "drafts".to_string(),
-                serde_json::json!(format!("[{count} drafts]")),
+                serde_json::json!(format!("[{} drafts]", drafts.len())),
             );
         }
     }
-    value
+    serde_json::Value::Object(redacted)
 }
 
 /// Arguments for `commit_activity_drafts`.
@@ -265,6 +268,7 @@ impl AgentTool for CommitActivityDrafts {
                 "drafts": {
                     "type": "array",
                     "description": "Activity drafts to persist.",
+                    "maxItems": MAX_COMMIT_DRAFTS,
                     "items": activity_draft_schema()
                 }
             },
@@ -289,6 +293,17 @@ impl AgentTool for CommitActivityDrafts {
         env: Arc<dyn AgentEnvironment>,
         args: serde_json::Value,
     ) -> Result<AgentToolResult, AgentToolError> {
+        // Reject oversized batches from the raw array length before
+        // deserializing the whole payload — a buggy or hostile client with
+        // write scope must not be able to force unbounded work.
+        if let Some(len) = args.get("drafts").and_then(|d| d.as_array()).map(Vec::len) {
+            if len > MAX_COMMIT_DRAFTS {
+                return Err(AgentToolError::InvalidInput(format!(
+                    "Batch limited to {MAX_COMMIT_DRAFTS} drafts, got {len}"
+                )));
+            }
+        }
+
         let args: CommitActivityDraftsArgs = serde_json::from_value(args)?;
 
         let activity_service = env.activity_service();
@@ -465,6 +480,27 @@ mod tests {
         assert_eq!(
             redact_drafts(&batch)["drafts"],
             serde_json::json!("[2 drafts]")
+        );
+    }
+
+    #[test]
+    fn audit_redaction_drops_unknown_keys() {
+        // An extra top-level field must not survive into the audit log.
+        let args = serde_json::json!({
+            "draft": { "amount": 1.0 },
+            "note": "SSN 123-45-6789",
+        });
+        let redacted = redact_drafts(&args);
+        assert!(redacted.get("note").is_none());
+        assert_eq!(redacted.as_object().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn commit_drafts_schema_caps_batch_size() {
+        let schema = CommitActivityDrafts.input_schema();
+        assert_eq!(
+            schema["properties"]["drafts"]["maxItems"],
+            serde_json::json!(MAX_COMMIT_DRAFTS)
         );
     }
 }

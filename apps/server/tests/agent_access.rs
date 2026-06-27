@@ -295,7 +295,8 @@ async fn mcp_pat_lifecycle() {
         "read-only catalog must expose 17 tools (incl. get_import_mapping): {tools:?}"
     );
 
-    // (h) tools/call succeeds and writes an audit row (insert is spawned — poll).
+    // (h) tools/call succeeds and writes an audit row (awaited before the
+    // response returns; the poll just tolerates sink latency).
     let response = mcp_post(
         &server,
         Some(&pat),
@@ -544,8 +545,8 @@ async fn mcp_audit_disabled_writes_no_rows() {
     let call = parse_sse_data(&response.text().await.unwrap());
     assert_ne!(call["result"]["isError"], serde_json::json!(true));
 
-    // Audit inserts are spawned; give a disabled sink ample time to (not)
-    // write before asserting the log stayed empty.
+    // The sink is disabled, so no row is written; a small delay guards against
+    // any async write slipping in before asserting the log stayed empty.
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let page: serde_json::Value = server
         .client

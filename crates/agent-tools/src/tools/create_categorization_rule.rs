@@ -294,6 +294,29 @@ impl AgentTool for CreateCategorizationRule {
         AgentToolAccess::Suggest
     }
 
+    fn sanitize_args_for_audit(&self, args: &serde_json::Value) -> serde_json::Value {
+        // `pattern` and `name` echo the user's real merchant/transaction text,
+        // and `accountId` is identifying. Keep only the structural fields (match
+        // type + target category) so the audit row records what kind of rule was
+        // created without persisting the spending-pattern string. Allowlist, so
+        // any future arg is excluded by default rather than leaked.
+        let mut redacted = serde_json::Map::new();
+        if let Some(obj) = args.as_object() {
+            for key in ["matchType", "categoryKey", "taxonomyId", "activityType"] {
+                if let Some(value) = obj.get(key) {
+                    redacted.insert(key.to_string(), value.clone());
+                }
+            }
+            if obj.contains_key("pattern") {
+                redacted.insert("pattern".to_string(), serde_json::json!("[redacted]"));
+            }
+            if obj.contains_key("name") {
+                redacted.insert("name".to_string(), serde_json::json!("[redacted]"));
+            }
+        }
+        serde_json::Value::Object(redacted)
+    }
+
     async fn call(
         &self,
         env: Arc<dyn AgentEnvironment>,
@@ -328,6 +351,28 @@ mod tests {
         // `name` was made optional intentionally — agent should be able to omit it
         // and let the tool generate "{pattern} → {category_path}".
         assert!(!required.contains(&"name".to_string()));
+    }
+
+    #[test]
+    fn audit_redaction_drops_pattern_and_name() {
+        let args = serde_json::json!({
+            "name": "T&T → Groceries",
+            "pattern": "COBS BREAD",
+            "matchType": "contains",
+            "categoryKey": "groceries",
+            "taxonomyId": "spending_categories",
+            "accountId": "acct-1",
+        });
+        let redacted = CreateCategorizationRule.sanitize_args_for_audit(&args);
+        // Structural fields are kept for a useful audit trail.
+        assert_eq!(redacted["categoryKey"], serde_json::json!("groceries"));
+        assert_eq!(redacted["matchType"], serde_json::json!("contains"));
+        // The user's merchant/transaction text must never be persisted.
+        assert_eq!(redacted["pattern"], serde_json::json!("[redacted]"));
+        assert_eq!(redacted["name"], serde_json::json!("[redacted]"));
+        assert!(!redacted.to_string().contains("COBS BREAD"));
+        // Identifying / unrecognized fields are dropped by the allowlist.
+        assert!(redacted.get("accountId").is_none());
     }
 
     #[test]

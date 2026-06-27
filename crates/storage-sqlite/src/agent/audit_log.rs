@@ -107,9 +107,18 @@ impl McpAuditRepository {
         let mut rows_query = mcp_audit_log::table.into_boxed();
 
         if let Some(search) = filter.tool_search.filter(|s| !s.is_empty()) {
-            let pattern = format!("%{search}%");
-            count_query = count_query.filter(mcp_audit_log::tool.like(pattern.clone()));
-            rows_query = rows_query.filter(mcp_audit_log::tool.like(pattern));
+            // Escape LIKE wildcards so a literal `_`/`%` in the search matches
+            // literally. Every tool name contains `_` (e.g.
+            // `commit_activity_draft`), which would otherwise act as a
+            // single-char wildcard and over-match.
+            let escaped = search
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            let pattern = format!("%{escaped}%");
+            count_query =
+                count_query.filter(mcp_audit_log::tool.like(pattern.clone()).escape('\\'));
+            rows_query = rows_query.filter(mcp_audit_log::tool.like(pattern).escape('\\'));
         }
         if !filter.tools.is_empty() {
             count_query = count_query.filter(mcp_audit_log::tool.eq_any(filter.tools.to_vec()));

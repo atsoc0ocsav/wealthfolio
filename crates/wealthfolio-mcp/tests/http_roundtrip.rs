@@ -303,7 +303,8 @@ async fn full_roundtrip_with_scope_filtering_and_audit() {
     );
 
     // audit entries: success for echo, denied for hidden, error for the
-    // unknown tool (spawned — poll)
+    // unknown tool. The handler awaits the audit write before responding, so
+    // the rows are present by now; the short poll just tolerates sink latency.
     let mut tries = 0;
     loop {
         let entries = sink.entries.lock().await;
