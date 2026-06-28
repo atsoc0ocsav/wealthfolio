@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SellForm } from "../sell-form";
+import { ACTIVITY_SUBTYPES } from "@/lib/constants";
 import type { AccountSelectOption } from "../fields";
 import type { Holding } from "@/lib/types";
 
@@ -100,6 +101,8 @@ vi.mock("../fields", async () => {
       );
     },
     OptionContractFields: () => <div data-testid="option-contract-fields" />,
+    PositionIntentSelector: () => <div data-testid="position-intent-selector" />,
+    StockTradeIntentSelector: () => <div data-testid="stock-trade-intent-selector" />,
     AssetTypeSelector: ({ name }: { name: string }) => (
       <div data-testid={`asset-type-selector-${name}`} />
     ),
@@ -371,6 +374,51 @@ describe("SellForm", () => {
           "than your available holdings (100)",
         );
       });
+    });
+
+    it("warns for Sell Short while the selected stock is long", () => {
+      holdingsHook.useHoldings.mockReturnValue({
+        holdings: [createHolding("AAPL", 5)],
+        isLoading: false,
+      });
+
+      render(
+        <SellForm
+          accounts={mockAccounts}
+          defaultValues={{
+            accountId: "acc-1",
+            assetId: "AAPL",
+            assetType: "stock",
+            subtype: ACTIVITY_SUBTYPES.POSITION_OPEN,
+          }}
+          onSubmit={mockOnSubmit}
+        />,
+      );
+
+      expect(screen.getByText(/split this into a normal Sell first/i)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /sell short/i })).toBeEnabled();
+    });
+
+    it("warns for a normal Sell while the selected stock is already short", () => {
+      holdingsHook.useHoldings.mockReturnValue({
+        holdings: [createHolding("AAPL", -5)],
+        isLoading: false,
+      });
+
+      render(
+        <SellForm
+          accounts={mockAccounts}
+          defaultValues={{
+            accountId: "acc-1",
+            assetId: "AAPL",
+            assetType: "stock",
+          }}
+          onSubmit={mockOnSubmit}
+        />,
+      );
+
+      expect(screen.getByText(/already have a short position/i)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /add sell/i })).toBeEnabled();
     });
 
     it("does not add back the original sell quantity after changing the asset", async () => {

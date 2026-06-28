@@ -430,6 +430,12 @@ export const ACTIVITY_SUBTYPES = {
   // ADJUSTMENT subtypes
   // OPTION_EXPIRY: removes option lots with no cash effect
   OPTION_EXPIRY: "OPTION_EXPIRY",
+
+  // BUY/SELL position intent subtypes
+  // POSITION_OPEN: opens or extends a long/short position
+  POSITION_OPEN: "POSITION_OPEN",
+  // POSITION_CLOSE: closes or reduces an existing long/short position
+  POSITION_CLOSE: "POSITION_CLOSE",
 } as const;
 
 export type ActivitySubtype = (typeof ACTIVITY_SUBTYPES)[keyof typeof ACTIVITY_SUBTYPES];
@@ -443,10 +449,14 @@ export const SUBTYPE_DISPLAY_NAMES: Record<string, string> = {
   [ACTIVITY_SUBTYPES.REBATE]: "Trading Rebate",
   [ACTIVITY_SUBTYPES.REFUND]: "Fee Refund",
   [ACTIVITY_SUBTYPES.OPTION_EXPIRY]: "Option Expiry",
+  [ACTIVITY_SUBTYPES.POSITION_OPEN]: "Open Position",
+  [ACTIVITY_SUBTYPES.POSITION_CLOSE]: "Close Position",
 };
 
 // Suggested subtypes per activity type
 export const SUBTYPES_BY_ACTIVITY_TYPE: Record<string, string[]> = {
+  [ActivityType.BUY]: [ACTIVITY_SUBTYPES.POSITION_OPEN, ACTIVITY_SUBTYPES.POSITION_CLOSE],
+  [ActivityType.SELL]: [ACTIVITY_SUBTYPES.POSITION_OPEN, ACTIVITY_SUBTYPES.POSITION_CLOSE],
   [ActivityType.DIVIDEND]: [ACTIVITY_SUBTYPES.DRIP, ACTIVITY_SUBTYPES.DIVIDEND_IN_KIND],
   [ActivityType.INTEREST]: [ACTIVITY_SUBTYPES.STAKING_REWARD],
   [ActivityType.CREDIT]: [

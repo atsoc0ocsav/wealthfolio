@@ -2,7 +2,21 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BuyForm } from "../buy-form";
+import { ACTIVITY_SUBTYPES } from "@/lib/constants";
 import type { AccountSelectOption } from "../fields";
+import type { Holding } from "@/lib/types";
+
+interface UseHoldingsResult {
+  holdings: Holding[];
+  isLoading: boolean;
+}
+
+const holdingsHook = vi.hoisted(() => ({
+  useHoldings: vi.fn<() => UseHoldingsResult>(() => ({
+    holdings: [],
+    isLoading: false,
+  })),
+}));
 
 // Mock useSettings hook to avoid AuthProvider dependency
 vi.mock("@/hooks/use-settings", () => ({
@@ -11,6 +25,10 @@ vi.mock("@/hooks/use-settings", () => ({
     isLoading: false,
     error: null,
   }),
+}));
+
+vi.mock("@/hooks/use-holdings", () => ({
+  useHoldings: holdingsHook.useHoldings,
 }));
 
 // Mock the fields components
@@ -54,6 +72,8 @@ vi.mock("../fields", () => ({
     <div data-testid={`asset-type-selector-${name}`} />
   ),
   OptionContractFields: () => <div data-testid="option-contract-fields" />,
+  PositionIntentSelector: () => <div data-testid="position-intent-selector" />,
+  StockTradeIntentSelector: () => <div data-testid="stock-trade-intent-selector" />,
   createValidatedSubmit: vi.fn((_form, handler) => handler),
 }));
 
@@ -117,6 +137,10 @@ describe("BuyForm", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    holdingsHook.useHoldings.mockReturnValue({
+      holdings: [],
+      isLoading: false,
+    });
   });
 
   describe("Render Tests", () => {
@@ -249,6 +273,58 @@ describe("BuyForm", () => {
       render(<BuyForm accounts={mockAccounts} onSubmit={mockOnSubmit} isEditing={false} />);
 
       expect(screen.getByTestId("plus-icon")).toBeInTheDocument();
+    });
+  });
+
+  describe("Stock Cover Mode", () => {
+    it("does not show Buy to Cover controls without a short holding", () => {
+      render(<BuyForm accounts={mockAccounts} onSubmit={mockOnSubmit} />);
+
+      expect(screen.queryByTestId("stock-trade-intent-selector")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /add buy/i })).toBeInTheDocument();
+    });
+
+    it("shows Buy to Cover controls when the selected stock holding is negative", () => {
+      holdingsHook.useHoldings.mockReturnValue({
+        holdings: [
+          {
+            id: "SEC-acc-1-AAPL",
+            instrument: { id: "AAPL", symbol: "AAPL" },
+            quantity: -5,
+          } as Holding,
+        ],
+        isLoading: false,
+      });
+
+      render(
+        <BuyForm
+          accounts={mockAccounts}
+          defaultValues={{ accountId: "acc-1", assetId: "AAPL" }}
+          onSubmit={mockOnSubmit}
+        />,
+      );
+
+      expect(screen.getByTestId("stock-trade-intent-selector")).toBeInTheDocument();
+      expect(screen.getByText("Short: 5 shares")).toBeInTheDocument();
+      expect(screen.getByText(/Use Buy to Cover to reduce it/i)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /add buy/i })).toBeEnabled();
+    });
+
+    it("warns for Buy to Cover when there is no short holding", () => {
+      render(
+        <BuyForm
+          accounts={mockAccounts}
+          defaultValues={{
+            accountId: "acc-1",
+            assetId: "AAPL",
+            subtype: ACTIVITY_SUBTYPES.POSITION_CLOSE,
+          }}
+          onSubmit={mockOnSubmit}
+        />,
+      );
+
+      expect(screen.getByText(/requires an existing short position/i)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /buy to cover/i })).toBeEnabled();
     });
   });
 });
