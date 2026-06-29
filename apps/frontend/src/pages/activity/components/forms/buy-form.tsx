@@ -546,6 +546,7 @@ export function BuyForm({
               assetCurrency={assetCurrencyFromSymbol ?? normalizeCurrency(assetCurrency)}
               accountCurrency={accountCurrency}
               baseCurrency={baseCurrency}
+              showSubtype={false}
             />
 
             {/* Notes */}

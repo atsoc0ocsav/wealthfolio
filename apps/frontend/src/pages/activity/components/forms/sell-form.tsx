@@ -621,6 +621,7 @@ export function SellForm({
               assetCurrency={assetCurrencyFromSymbol ?? normalizeCurrency(assetCurrency)}
               accountCurrency={accountCurrency}
               baseCurrency={baseCurrency}
+              showSubtype={false}
             />
 
             {/* Notes */}

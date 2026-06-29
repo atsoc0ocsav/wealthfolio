@@ -44,7 +44,7 @@ export function StockTradeIntentSelector<TFieldValues extends FieldValues = Fiel
   const selectedValue = field.value === shortValue ? shortValue : NORMAL;
 
   return (
-    <div className={cn("space-y-2", className)}>
+    <div role="group" aria-label="Trade Type" className={cn("space-y-2", className)}>
       <span className="text-sm font-medium">Trade Type</span>
       <AnimatedToggleGroup
         value={selectedValue}
