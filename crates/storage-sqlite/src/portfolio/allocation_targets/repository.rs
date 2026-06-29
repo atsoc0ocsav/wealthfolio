@@ -5,7 +5,7 @@ use diesel::sqlite::SqliteConnection;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use super::model::{AllocationTargetDB, AllocationTargetWeightDB, RebalanceSellConstraintDB};
+use super::model::{AllocationTargetConstraintDB, AllocationTargetDB, AllocationTargetWeightDB};
 use crate::db::{get_connection, WriteHandle};
 use crate::errors::StorageError;
 use crate::schema::{allocation_target_weights, allocation_targets};
@@ -302,22 +302,41 @@ impl AllocationTargetRepositoryTrait for AllocationTargetRepository {
         Ok(SaveAllocationTargetResult { target, weights })
     }
 
-    fn list_sell_constraints(
+    fn list_target_constraints(
         &self,
         target_id: &str,
-    ) -> Result<Vec<wealthfolio_core::portfolio::allocation_targets::RebalanceSellConstraint>> {
-        use crate::schema::rebalance_sell_constraints;
+    ) -> Result<Vec<wealthfolio_core::portfolio::allocation_targets::AllocationTargetConstraint>>
+    {
+        use crate::schema::allocation_target_constraints;
         let conn = &mut get_connection(&self.pool)?;
-        let rows = rebalance_sell_constraints::table
-            .filter(rebalance_sell_constraints::target_id.eq(target_id))
-            .order(rebalance_sell_constraints::created_at.asc())
-            .load::<RebalanceSellConstraintDB>(conn)
+        let rows = allocation_target_constraints::table
+            .filter(allocation_target_constraints::target_id.eq(target_id))
+            .order(allocation_target_constraints::created_at.asc())
+            .load::<AllocationTargetConstraintDB>(conn)
             .map_err(StorageError::from)?;
         rows.into_iter()
             .map(|db| {
-                let entity_type =
-                    wealthfolio_core::portfolio::allocation_targets::SellConstraintEntityType::try_from(
-                        db.entity_type.as_str(),
+                let subject_type =
+                    wealthfolio_core::portfolio::allocation_targets::ConstraintSubjectType::try_from(
+                        db.subject_type.as_str(),
+                    )
+                    .map_err(|e| {
+                        wealthfolio_core::errors::Error::Validation(
+                            wealthfolio_core::errors::ValidationError::InvalidInput(e),
+                        )
+                    })?;
+                let action =
+                    wealthfolio_core::portfolio::allocation_targets::ConstraintAction::try_from(
+                        db.action.as_str(),
+                    )
+                    .map_err(|e| {
+                        wealthfolio_core::errors::Error::Validation(
+                            wealthfolio_core::errors::ValidationError::InvalidInput(e),
+                        )
+                    })?;
+                let effect =
+                    wealthfolio_core::portfolio::allocation_targets::ConstraintEffect::try_from(
+                        db.effect.as_str(),
                     )
                     .map_err(|e| {
                         wealthfolio_core::errors::Error::Validation(
@@ -325,41 +344,54 @@ impl AllocationTargetRepositoryTrait for AllocationTargetRepository {
                         )
                     })?;
                 Ok(
-                    wealthfolio_core::portfolio::allocation_targets::RebalanceSellConstraint {
+                    wealthfolio_core::portfolio::allocation_targets::AllocationTargetConstraint {
                         id: db.id,
                         target_id: db.target_id,
-                        entity_type,
-                        entity_id: db.entity_id,
+                        subject_type,
+                        subject_id: db.subject_id,
+                        action,
+                        effect,
+                        reason: db.reason,
+                        metadata_json: db.metadata_json,
                         created_at: db.created_at,
+                        updated_at: db.updated_at,
                     },
                 )
             })
             .collect()
     }
 
-    async fn save_sell_constraints(
+    async fn save_target_constraints(
         &self,
         target_id: &str,
-        constraints: Vec<wealthfolio_core::portfolio::allocation_targets::RebalanceSellConstraint>,
-    ) -> Result<Vec<wealthfolio_core::portfolio::allocation_targets::RebalanceSellConstraint>> {
-        use crate::schema::rebalance_sell_constraints;
+        constraints: Vec<
+            wealthfolio_core::portfolio::allocation_targets::AllocationTargetConstraint,
+        >,
+    ) -> Result<Vec<wealthfolio_core::portfolio::allocation_targets::AllocationTargetConstraint>>
+    {
+        use crate::schema::allocation_target_constraints;
         let target_id_owned = target_id.to_string();
-        let db_rows: Vec<RebalanceSellConstraintDB> = constraints
+        let db_rows: Vec<AllocationTargetConstraintDB> = constraints
             .iter()
-            .map(|c| RebalanceSellConstraintDB {
+            .map(|c| AllocationTargetConstraintDB {
                 id: c.id.clone(),
                 target_id: c.target_id.clone(),
-                entity_type: c.entity_type.as_str().to_string(),
-                entity_id: c.entity_id.clone(),
+                subject_type: c.subject_type.as_str().to_string(),
+                subject_id: c.subject_id.clone(),
+                action: c.action.as_str().to_string(),
+                effect: c.effect.as_str().to_string(),
+                reason: c.reason.clone(),
+                metadata_json: c.metadata_json.clone(),
                 created_at: c.created_at.clone(),
+                updated_at: c.updated_at.clone(),
             })
             .collect();
 
         self.writer
             .exec_tx(move |tx| {
-                let existing_ids = rebalance_sell_constraints::table
-                    .filter(rebalance_sell_constraints::target_id.eq(&target_id_owned))
-                    .select(rebalance_sell_constraints::id)
+                let existing_ids = allocation_target_constraints::table
+                    .filter(allocation_target_constraints::target_id.eq(&target_id_owned))
+                    .select(allocation_target_constraints::id)
                     .load::<String>(tx.conn())
                     .map_err(StorageError::from)?
                     .into_iter()
@@ -367,21 +399,21 @@ impl AllocationTargetRepositoryTrait for AllocationTargetRepository {
                 let incoming_ids: HashSet<String> = db_rows.iter().map(|r| r.id.clone()).collect();
 
                 diesel::delete(
-                    rebalance_sell_constraints::table
-                        .filter(rebalance_sell_constraints::target_id.eq(&target_id_owned)),
+                    allocation_target_constraints::table
+                        .filter(allocation_target_constraints::target_id.eq(&target_id_owned)),
                 )
                 .execute(tx.conn())
                 .map_err(StorageError::from)?;
 
                 if !db_rows.is_empty() {
-                    diesel::insert_into(rebalance_sell_constraints::table)
+                    diesel::insert_into(allocation_target_constraints::table)
                         .values(&db_rows)
                         .execute(tx.conn())
                         .map_err(StorageError::from)?;
                 }
 
                 for old_id in existing_ids.difference(&incoming_ids) {
-                    tx.delete::<RebalanceSellConstraintDB>(old_id.clone());
+                    tx.delete::<AllocationTargetConstraintDB>(old_id.clone());
                 }
                 for row in &db_rows {
                     if existing_ids.contains(&row.id) {
@@ -394,7 +426,7 @@ impl AllocationTargetRepositoryTrait for AllocationTargetRepository {
             })
             .await?;
 
-        self.list_sell_constraints(target_id)
+        self.list_target_constraints(target_id)
     }
 }
 
@@ -447,7 +479,7 @@ mod tests {
             min_trade_amount: "0".to_string(),
             whole_shares_only: false,
             allow_sells: false,
-            max_turnover_pct: None,
+            max_turnover_bps: None,
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
             archived_at: None,
@@ -471,7 +503,11 @@ mod tests {
     fn outbox_rows(repo: &AllocationTargetRepository) -> Vec<(String, String, String)> {
         let conn = &mut get_connection(&repo.pool).expect("conn");
         sync_outbox::table
-            .select((sync_outbox::entity, sync_outbox::entity_id, sync_outbox::op))
+            .select((
+                sync_outbox::entity,
+                sync_outbox::subject_id,
+                sync_outbox::op,
+            ))
             .order(sync_outbox::created_at.asc())
             .load::<(String, String, String)>(conn)
             .expect("load outbox")

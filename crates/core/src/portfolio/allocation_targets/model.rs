@@ -157,7 +157,7 @@ pub struct AllocationTarget {
     pub min_trade_amount: String,
     pub whole_shares_only: bool,
     pub allow_sells: bool,
-    pub max_turnover_pct: Option<String>,
+    pub max_turnover_bps: Option<i32>,
     pub created_at: String,
     pub updated_at: String,
     pub archived_at: Option<String>,
@@ -178,7 +178,7 @@ pub struct NewAllocationTarget {
     pub min_trade_amount: Option<String>,
     pub whole_shares_only: Option<bool>,
     pub allow_sells: Option<bool>,
-    pub max_turnover_pct: Option<String>,
+    pub max_turnover_bps: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -292,50 +292,108 @@ pub struct DriftHoldingsReport {
     pub rows: Vec<DriftHoldingRow>,
 }
 
-// ── Sell constraints ─────────────────────────────────────────────────────────
+// ── Allocation target constraints ────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SellConstraintEntityType {
+pub enum ConstraintSubjectType {
     Asset,
     Account,
+    Category,
 }
 
-impl SellConstraintEntityType {
+impl ConstraintSubjectType {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Asset => "asset",
             Self::Account => "account",
+            Self::Category => "category",
         }
     }
 }
 
-impl TryFrom<&str> for SellConstraintEntityType {
+impl TryFrom<&str> for ConstraintSubjectType {
     type Error = String;
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         match s {
             "asset" => Ok(Self::Asset),
             "account" => Ok(Self::Account),
-            _ => Err(format!("unknown sell constraint entity type: {s}")),
+            "category" => Ok(Self::Category),
+            _ => Err(format!("unknown constraint subject type: {s}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConstraintAction {
+    Buy,
+    Sell,
+    Trade,
+}
+
+impl ConstraintAction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Buy => "buy",
+            Self::Sell => "sell",
+            Self::Trade => "trade",
+        }
+    }
+}
+
+impl TryFrom<&str> for ConstraintAction {
+    type Error = String;
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        match s {
+            "buy" => Ok(Self::Buy),
+            "sell" => Ok(Self::Sell),
+            "trade" => Ok(Self::Trade),
+            _ => Err(format!("unknown constraint action: {s}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConstraintEffect {
+    Block,
+    Avoid,
+}
+
+impl ConstraintEffect {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Block => "block",
+            Self::Avoid => "avoid",
+        }
+    }
+}
+
+impl TryFrom<&str> for ConstraintEffect {
+    type Error = String;
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        match s {
+            "block" => Ok(Self::Block),
+            "avoid" => Ok(Self::Avoid),
+            _ => Err(format!("unknown constraint effect: {s}")),
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RebalanceSellConstraint {
+pub struct AllocationTargetConstraint {
     pub id: String,
     pub target_id: String,
-    pub entity_type: SellConstraintEntityType,
-    pub entity_id: String,
+    pub subject_type: ConstraintSubjectType,
+    pub subject_id: String,
+    pub action: ConstraintAction,
+    pub effect: ConstraintEffect,
+    pub reason: Option<String>,
+    pub metadata_json: Option<String>,
     pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NewRebalanceSellConstraint {
-    pub entity_type: SellConstraintEntityType,
-    pub entity_id: String,
+    pub updated_at: String,
 }
 
 // ── Rebalance types ──────────────────────────────────────────────────────────
@@ -350,10 +408,6 @@ pub struct CalculateRebalancePlanInput {
     pub aggregated_account_id: String,
     #[serde(default)]
     pub scenario_mode: ScenarioMode,
-    #[serde(default)]
-    pub do_not_sell_asset_ids: Vec<String>,
-    #[serde(default)]
-    pub avoid_selling_account_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

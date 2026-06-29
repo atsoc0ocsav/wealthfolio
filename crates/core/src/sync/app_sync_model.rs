@@ -102,7 +102,7 @@ pub enum SyncEntity {
     PortfolioAccount,
     AllocationTarget,
     AllocationTargetWeight,
-    RebalanceSellConstraint,
+    AllocationTargetConstraint,
     // Spending module (wealthfolio-spending crate). Prefixed with `Spending*`
     // because the bare names (`Event`, `EventType`, `CategorizationRule`)
     // would clash with the codebase's existing event-system vocabulary
@@ -145,7 +145,7 @@ pub enum SyncOutboxStatus {
 pub struct SyncOutboxEvent {
     pub event_id: String,
     pub entity: SyncEntity,
-    pub entity_id: String,
+    pub subject_id: String,
     pub op: SyncOperation,
     pub client_timestamp: String,
     pub payload: String,
@@ -164,7 +164,7 @@ pub struct SyncOutboxEvent {
 #[serde(rename_all = "camelCase")]
 pub struct SyncEntityMetadata {
     pub entity: SyncEntity,
-    pub entity_id: String,
+    pub subject_id: String,
     pub last_event_id: String,
     pub last_client_timestamp: String,
     pub last_op: SyncOperation,
@@ -191,7 +191,7 @@ pub struct SyncEngineStatus {
 pub struct SyncReplayResult {
     pub event_id: String,
     pub entity: SyncEntity,
-    pub entity_id: String,
+    pub subject_id: String,
     pub applied: bool,
     pub skipped_reason: Option<String>,
 }
@@ -268,13 +268,13 @@ pub fn should_apply_lww(
 pub trait EntitySyncAdapter: Send + Sync {
     fn entity(&self) -> SyncEntity;
 
-    fn serialize_create(&self, entity_id: &str) -> Result<serde_json::Value, String>;
-    fn serialize_update(&self, entity_id: &str) -> Result<serde_json::Value, String>;
-    fn serialize_delete(&self, entity_id: &str) -> Result<serde_json::Value, String>;
+    fn serialize_create(&self, subject_id: &str) -> Result<serde_json::Value, String>;
+    fn serialize_update(&self, subject_id: &str) -> Result<serde_json::Value, String>;
+    fn serialize_delete(&self, subject_id: &str) -> Result<serde_json::Value, String>;
 
     fn apply_event_lww(
         &self,
-        entity_id: &str,
+        subject_id: &str,
         event_id: &str,
         client_timestamp: &str,
         payload: &serde_json::Value,
@@ -346,7 +346,7 @@ mod tests {
             SyncEntity::PortfolioAccount,
             SyncEntity::AllocationTarget,
             SyncEntity::AllocationTargetWeight,
-            SyncEntity::RebalanceSellConstraint,
+            SyncEntity::AllocationTargetConstraint,
             SyncEntity::SpendingSetting,
             SyncEntity::ActivityTaxonomyAssignment,
             SyncEntity::SpendingActivitySplit,

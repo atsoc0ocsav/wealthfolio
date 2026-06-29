@@ -388,8 +388,8 @@ export const COMMANDS: CommandMap = {
     path: "/allocation-targets/save-with-weights",
   },
   get_allocation_target_drift: { method: "POST", path: "/allocation-targets" },
-  list_sell_constraints: { method: "GET", path: "/allocation-targets" },
-  save_sell_constraints: { method: "POST", path: "/allocation-targets" },
+  list_target_constraints: { method: "GET", path: "/allocation-targets" },
+  save_target_constraints: { method: "POST", path: "/allocation-targets" },
   calculate_rebalance_plan: { method: "POST", path: "/allocation-targets/rebalance/calculate" },
   // Alternative Assets
   create_alternative_asset: { method: "POST", path: "/alternative-assets" },
@@ -1912,17 +1912,17 @@ export const invoke = async <T>(command: string, payload?: Record<string, unknow
       body = JSON.stringify({ filter, includeHoldings: includeHoldings ?? false });
       break;
     }
-    case "list_sell_constraints": {
+    case "list_target_constraints": {
       const { targetId } = payload as { targetId: string };
-      url += `/${encodeURIComponent(targetId)}/sell-constraints`;
+      url += `/${encodeURIComponent(targetId)}/constraints`;
       break;
     }
-    case "save_sell_constraints": {
+    case "save_target_constraints": {
       const { targetId, constraints } = payload as {
         targetId: string;
         constraints: unknown[];
       };
-      url += `/${encodeURIComponent(targetId)}/sell-constraints`;
+      url += `/${encodeURIComponent(targetId)}/constraints`;
       body = JSON.stringify(constraints);
       break;
     }
@@ -1932,23 +1932,17 @@ export const invoke = async <T>(command: string, payload?: Record<string, unknow
         availableCash,
         filter,
         scenarioMode,
-        doNotSellAssetIds,
-        avoidSellingAccountIds,
       } = payload as {
         targetId: string;
         availableCash: number;
         filter: unknown;
         scenarioMode: string;
-        doNotSellAssetIds?: string[];
-        avoidSellingAccountIds?: string[];
       };
       body = JSON.stringify({
         targetId,
         availableCash,
         filter,
         scenarioMode,
-        doNotSellAssetIds,
-        avoidSellingAccountIds,
       });
       break;
     }

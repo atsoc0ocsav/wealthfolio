@@ -108,8 +108,8 @@ pub fn default_adapter_descriptors() -> Vec<EntityAdapterDescriptor> {
             table_name: "allocation_target_weights",
         },
         EntityAdapterDescriptor {
-            entity: SyncEntity::RebalanceSellConstraint,
-            table_name: "rebalance_sell_constraints",
+            entity: SyncEntity::AllocationTargetConstraint,
+            table_name: "allocation_target_constraints",
         },
         EntityAdapterDescriptor {
             entity: SyncEntity::SpendingSetting,

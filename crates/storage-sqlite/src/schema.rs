@@ -455,7 +455,7 @@ diesel::table! {
         event_id -> Text,
         seq -> BigInt,
         entity -> Text,
-        entity_id -> Text,
+        subject_id -> Text,
         applied_at -> Text,
     }
 }
@@ -493,9 +493,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    sync_entity_metadata (entity, entity_id) {
+    sync_entity_metadata (entity, subject_id) {
         entity -> Text,
-        entity_id -> Text,
+        subject_id -> Text,
         last_event_id -> Text,
         last_client_timestamp -> Text,
         last_op -> Text,
@@ -507,7 +507,7 @@ diesel::table! {
     sync_outbox (event_id) {
         event_id -> Text,
         entity -> Text,
-        entity_id -> Text,
+        subject_id -> Text,
         op -> Text,
         client_timestamp -> Text,
         payload -> Text,
@@ -750,7 +750,7 @@ diesel::table! {
         created_at -> Text,
         updated_at -> Text,
         archived_at -> Nullable<Text>,
-        max_turnover_pct -> Nullable<Text>,
+        max_turnover_bps -> Nullable<Integer>,
     }
 }
 
@@ -800,16 +800,21 @@ diesel::table! {
 diesel::joinable!(allocation_target_weights -> allocation_targets (target_id));
 
 diesel::table! {
-    rebalance_sell_constraints (id) {
+    allocation_target_constraints (id) {
         id -> Text,
         target_id -> Text,
-        entity_type -> Text,
-        entity_id -> Text,
+        subject_type -> Text,
+        subject_id -> Text,
+        action -> Text,
+        effect -> Text,
+        reason -> Nullable<Text>,
+        metadata_json -> Nullable<Text>,
         created_at -> Text,
+        updated_at -> Text,
     }
 }
 
-diesel::joinable!(rebalance_sell_constraints -> allocation_targets (target_id));
+diesel::joinable!(allocation_target_constraints -> allocation_targets (target_id));
 
 diesel::joinable!(accounts -> platforms (platform_id));
 diesel::joinable!(activities -> accounts (account_id));
@@ -906,5 +911,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     allocation_target_weights,
     personal_access_tokens,
     mcp_audit_log,
-    rebalance_sell_constraints,
+    allocation_target_constraints,
 );

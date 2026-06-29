@@ -54,7 +54,7 @@ pub struct NewActivityTaxonomyAssignmentDB {
 
 impl crate::sync::SyncOutboxModel for ActivityTaxonomyAssignmentDB {
     const ENTITY: SyncEntity = SyncEntity::ActivityTaxonomyAssignment;
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }

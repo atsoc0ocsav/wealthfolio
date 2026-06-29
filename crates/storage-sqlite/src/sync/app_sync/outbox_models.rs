@@ -9,7 +9,7 @@ use crate::goals::{GoalDB, GoalPlanDB, GoalsAllocationDB};
 use crate::limits::ContributionLimitDB;
 use crate::market_data::QuoteDB;
 use crate::portfolio::allocation_targets::{
-    AllocationTargetDB, AllocationTargetWeightDB, RebalanceSellConstraintDB,
+    AllocationTargetDB, AllocationTargetWeightDB, AllocationTargetConstraintDB,
 };
 use crate::portfolio::snapshot::AccountStateSnapshotDB;
 use crate::portfolios::{PortfolioAccountDB, PortfolioDB};
@@ -36,7 +36,7 @@ pub(crate) fn is_syncable_spending_setting_key(key: &str) -> bool {
 impl SyncOutboxModel for AccountDB {
     const ENTITY: SyncEntity = SyncEntity::Account;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 
@@ -53,7 +53,7 @@ impl SyncOutboxModel for AccountDB {
 impl SyncOutboxModel for AssetDB {
     const ENTITY: SyncEntity = SyncEntity::Asset;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }
@@ -61,7 +61,7 @@ impl SyncOutboxModel for AssetDB {
 impl SyncOutboxModel for QuoteDB {
     const ENTITY: SyncEntity = SyncEntity::Quote;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 
@@ -73,7 +73,7 @@ impl SyncOutboxModel for QuoteDB {
 impl SyncOutboxModel for ActivityDB {
     const ENTITY: SyncEntity = SyncEntity::Activity;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 
@@ -93,7 +93,7 @@ impl SyncOutboxModel for ActivityDB {
 impl SyncOutboxModel for ImportAccountTemplateDB {
     const ENTITY: SyncEntity = SyncEntity::ActivityImportProfile;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }
@@ -101,7 +101,7 @@ impl SyncOutboxModel for ImportAccountTemplateDB {
 impl SyncOutboxModel for ImportTemplateDB {
     const ENTITY: SyncEntity = SyncEntity::ImportTemplate;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 
@@ -115,7 +115,7 @@ impl SyncOutboxModel for ImportTemplateDB {
 impl SyncOutboxModel for GoalDB {
     const ENTITY: SyncEntity = SyncEntity::Goal;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }
@@ -123,7 +123,7 @@ impl SyncOutboxModel for GoalDB {
 impl SyncOutboxModel for GoalPlanDB {
     const ENTITY: SyncEntity = SyncEntity::GoalPlan;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.goal_id
     }
 }
@@ -131,7 +131,7 @@ impl SyncOutboxModel for GoalPlanDB {
 impl SyncOutboxModel for GoalsAllocationDB {
     const ENTITY: SyncEntity = SyncEntity::GoalsAllocation;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }
@@ -139,7 +139,7 @@ impl SyncOutboxModel for GoalsAllocationDB {
 impl SyncOutboxModel for AiThreadDB {
     const ENTITY: SyncEntity = SyncEntity::AiThread;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }
@@ -147,7 +147,7 @@ impl SyncOutboxModel for AiThreadDB {
 impl SyncOutboxModel for AiMessageDB {
     const ENTITY: SyncEntity = SyncEntity::AiMessage;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }
@@ -155,7 +155,7 @@ impl SyncOutboxModel for AiMessageDB {
 impl SyncOutboxModel for AiThreadTagDB {
     const ENTITY: SyncEntity = SyncEntity::AiThreadTag;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }
@@ -163,7 +163,7 @@ impl SyncOutboxModel for AiThreadTagDB {
 impl SyncOutboxModel for ContributionLimitDB {
     const ENTITY: SyncEntity = SyncEntity::ContributionLimit;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }
@@ -171,7 +171,7 @@ impl SyncOutboxModel for ContributionLimitDB {
 impl SyncOutboxModel for AssetTaxonomyAssignmentDB {
     const ENTITY: SyncEntity = SyncEntity::AssetTaxonomyAssignment;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }
@@ -179,7 +179,7 @@ impl SyncOutboxModel for AssetTaxonomyAssignmentDB {
 impl SyncOutboxModel for PlatformDB {
     const ENTITY: SyncEntity = SyncEntity::Platform;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 
@@ -191,7 +191,7 @@ impl SyncOutboxModel for PlatformDB {
 impl SyncOutboxModel for ImportRunDB {
     const ENTITY: SyncEntity = SyncEntity::ImportRun;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 
@@ -203,7 +203,7 @@ impl SyncOutboxModel for ImportRunDB {
 impl SyncOutboxModel for AccountStateSnapshotDB {
     const ENTITY: SyncEntity = SyncEntity::Snapshot;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 
@@ -222,7 +222,7 @@ impl SyncOutboxModel for AccountStateSnapshotDB {
 impl SyncOutboxModel for CustomProviderDB {
     const ENTITY: SyncEntity = SyncEntity::CustomProvider;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }
@@ -230,7 +230,7 @@ impl SyncOutboxModel for CustomProviderDB {
 impl SyncOutboxModel for PortfolioDB {
     const ENTITY: SyncEntity = SyncEntity::Portfolio;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }
@@ -238,7 +238,7 @@ impl SyncOutboxModel for PortfolioDB {
 impl SyncOutboxModel for PortfolioAccountDB {
     const ENTITY: SyncEntity = SyncEntity::PortfolioAccount;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }
@@ -246,7 +246,7 @@ impl SyncOutboxModel for PortfolioAccountDB {
 impl SyncOutboxModel for AllocationTargetDB {
     const ENTITY: SyncEntity = SyncEntity::AllocationTarget;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }
@@ -254,15 +254,15 @@ impl SyncOutboxModel for AllocationTargetDB {
 impl SyncOutboxModel for AllocationTargetWeightDB {
     const ENTITY: SyncEntity = SyncEntity::AllocationTargetWeight;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }
 
-impl SyncOutboxModel for RebalanceSellConstraintDB {
-    const ENTITY: SyncEntity = SyncEntity::RebalanceSellConstraint;
+impl SyncOutboxModel for AllocationTargetConstraintDB {
+    const ENTITY: SyncEntity = SyncEntity::AllocationTargetConstraint;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }
@@ -270,7 +270,7 @@ impl SyncOutboxModel for RebalanceSellConstraintDB {
 impl SyncOutboxModel for AppSettingDB {
     const ENTITY: SyncEntity = SyncEntity::SpendingSetting;
 
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.setting_key
     }
 
@@ -278,11 +278,11 @@ impl SyncOutboxModel for AppSettingDB {
         is_syncable_spending_setting_key(&self.setting_key)
     }
 
-    fn should_sync_outbox_delete(entity_id: &str) -> bool {
-        is_syncable_spending_setting_key(entity_id)
+    fn should_sync_outbox_delete(subject_id: &str) -> bool {
+        is_syncable_spending_setting_key(subject_id)
     }
 
-    fn delete_payload(entity_id: &str) -> serde_json::Value {
-        serde_json::json!({ "setting_key": entity_id })
+    fn delete_payload(subject_id: &str) -> serde_json::Value {
+        serde_json::json!({ "setting_key": subject_id })
     }
 }

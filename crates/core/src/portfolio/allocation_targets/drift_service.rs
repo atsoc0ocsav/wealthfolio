@@ -486,7 +486,7 @@ mod tests {
             min_trade_amount: "0".to_string(),
             whole_shares_only: false,
             allow_sells: false,
-            max_turnover_pct: None,
+            max_turnover_bps: None,
             created_at: "2026-01-01".to_string(),
             updated_at: "2026-01-01".to_string(),
             archived_at: None,
@@ -751,18 +751,18 @@ mod tests {
         ) -> CoreResult<SaveAllocationTargetResult> {
             unimplemented!()
         }
-        fn list_sell_constraints(
+        fn list_target_constraints(
             &self,
             _: &str,
-        ) -> CoreResult<Vec<crate::portfolio::allocation_targets::RebalanceSellConstraint>>
+        ) -> CoreResult<Vec<crate::portfolio::allocation_targets::AllocationTargetConstraint>>
         {
             Ok(vec![])
         }
-        async fn save_sell_constraints(
+        async fn save_target_constraints(
             &self,
             _: &str,
-            _: Vec<crate::portfolio::allocation_targets::RebalanceSellConstraint>,
-        ) -> CoreResult<Vec<crate::portfolio::allocation_targets::RebalanceSellConstraint>>
+            _: Vec<crate::portfolio::allocation_targets::AllocationTargetConstraint>,
+        ) -> CoreResult<Vec<crate::portfolio::allocation_targets::AllocationTargetConstraint>>
         {
             unimplemented!()
         }

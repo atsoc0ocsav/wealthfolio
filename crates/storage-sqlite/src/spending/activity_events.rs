@@ -32,7 +32,7 @@ pub struct ActivityEventDB {
 
 impl crate::sync::SyncOutboxModel for ActivityEventDB {
     const ENTITY: SyncEntity = SyncEntity::SpendingActivityEvent;
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         // PK is `activity_id` — one tag per activity.
         &self.activity_id
     }

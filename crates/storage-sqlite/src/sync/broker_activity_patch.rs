@@ -60,7 +60,7 @@ pub(crate) enum BrokerActivityUserPatchApplyOutcome {
 
 #[derive(Debug, Clone)]
 struct PendingBrokerActivityUserPatch {
-    entity_id: String,
+    subject_id: String,
     event_id: String,
     payload: BrokerActivityUserPatchPayload,
     client_timestamp: String,
@@ -89,7 +89,7 @@ pub(crate) fn broker_activity_identity(
     })
 }
 
-pub(crate) fn broker_activity_user_patch_entity_id(identity: &BrokerActivityIdentity) -> String {
+pub(crate) fn broker_activity_user_patch_subject_id(identity: &BrokerActivityIdentity) -> String {
     let mut hasher = Sha256::new();
     hash_component(&mut hasher, &identity.source_system);
     hash_component(&mut hasher, &identity.provider_account_id);
@@ -124,7 +124,7 @@ pub(crate) fn broker_activity_user_patch_request(
 
     Ok(Some(OutboxWriteRequest::new(
         SyncEntity::BrokerActivityUserPatch,
-        broker_activity_user_patch_entity_id(&identity),
+        broker_activity_user_patch_subject_id(&identity),
         SyncOperation::Update,
         serde_json::to_value(payload)?,
     )))
@@ -167,7 +167,7 @@ pub(crate) fn parse_broker_activity_user_patch_payload(
 
 pub(crate) fn apply_broker_activity_user_patch_tx(
     conn: &mut SqliteConnection,
-    entity_id: &str,
+    subject_id: &str,
     event_id: &str,
     payload_json: &serde_json::Value,
     client_timestamp: &str,
@@ -177,12 +177,12 @@ pub(crate) fn apply_broker_activity_user_patch_tx(
     let payload = parse_broker_activity_user_patch_payload(payload_json)?;
     let outcome = apply_broker_activity_user_patch_payload_tx(
         conn,
-        entity_id,
+        subject_id,
         payload.clone(),
         client_timestamp,
     )?;
     if outcome == BrokerActivityUserPatchApplyOutcome::MissingTarget {
-        defer_broker_activity_user_patch(entity_id, event_id, payload, client_timestamp, seq, op);
+        defer_broker_activity_user_patch(subject_id, event_id, payload, client_timestamp, seq, op);
     }
     Ok(outcome)
 }
@@ -197,35 +197,35 @@ pub(crate) fn apply_pending_broker_activity_user_patches_tx(
         guard.values().cloned().collect::<Vec<_>>()
     };
 
-    let mut applied_entity_ids = Vec::new();
+    let mut applied_subject_ids = Vec::new();
     for patch in pending {
         if apply_broker_activity_user_patch_payload_tx(
             conn,
-            &patch.entity_id,
+            &patch.subject_id,
             patch.payload.clone(),
             &patch.client_timestamp,
         )? == BrokerActivityUserPatchApplyOutcome::Applied
         {
             record_applied_broker_activity_patch_tx(conn, &patch)?;
-            applied_entity_ids.push(patch.entity_id);
+            applied_subject_ids.push(patch.subject_id);
         }
     }
 
-    if !applied_entity_ids.is_empty() {
+    if !applied_subject_ids.is_empty() {
         let mut guard = pending_broker_activity_patches()
             .lock()
             .expect("pending broker activity patch lock poisoned");
-        for entity_id in &applied_entity_ids {
-            guard.remove(entity_id);
+        for subject_id in &applied_subject_ids {
+            guard.remove(subject_id);
         }
     }
 
-    Ok(applied_entity_ids.len())
+    Ok(applied_subject_ids.len())
 }
 
 fn apply_broker_activity_user_patch_payload_tx(
     conn: &mut SqliteConnection,
-    entity_id: &str,
+    subject_id: &str,
     payload: BrokerActivityUserPatchPayload,
     client_timestamp: &str,
 ) -> Result<BrokerActivityUserPatchApplyOutcome> {
@@ -239,11 +239,11 @@ fn apply_broker_activity_user_patch_payload_tx(
             "Invalid broker activity user patch identity".to_string(),
         ))
     })?;
-    let expected_entity_id = broker_activity_user_patch_entity_id(&identity);
-    if expected_entity_id != entity_id {
+    let expected_subject_id = broker_activity_user_patch_subject_id(&identity);
+    if expected_subject_id != subject_id {
         return Err(Error::Database(DatabaseError::Internal(format!(
-            "Broker activity user patch entity_id '{}' does not match payload identity '{}'",
-            entity_id, expected_entity_id
+            "Broker activity user patch subject_id '{}' does not match payload identity '{}'",
+            subject_id, expected_subject_id
         ))));
     }
 
@@ -299,7 +299,7 @@ fn apply_broker_activity_user_patch_payload_tx(
 }
 
 fn defer_broker_activity_user_patch(
-    entity_id: &str,
+    subject_id: &str,
     event_id: &str,
     payload: BrokerActivityUserPatchPayload,
     client_timestamp: &str,
@@ -309,7 +309,7 @@ fn defer_broker_activity_user_patch(
     let mut guard = pending_broker_activity_patches()
         .lock()
         .expect("pending broker activity patch lock poisoned");
-    let should_replace = guard.get(entity_id).is_none_or(|existing| {
+    let should_replace = guard.get(subject_id).is_none_or(|existing| {
         should_apply_lww(
             &existing.client_timestamp,
             &existing.event_id,
@@ -322,9 +322,9 @@ fn defer_broker_activity_user_patch(
     }
 
     guard.insert(
-        entity_id.to_string(),
+        subject_id.to_string(),
         PendingBrokerActivityUserPatch {
-            entity_id: entity_id.to_string(),
+            subject_id: subject_id.to_string(),
             event_id: event_id.to_string(),
             payload,
             client_timestamp: client_timestamp.to_string(),
@@ -344,7 +344,7 @@ fn record_applied_broker_activity_patch_tx(
     diesel::insert_into(sync_entity_metadata::table)
         .values(SyncEntityMetadataDB {
             entity: entity_db.clone(),
-            entity_id: patch.entity_id.clone(),
+            subject_id: patch.subject_id.clone(),
             last_event_id: patch.event_id.clone(),
             last_client_timestamp: patch.client_timestamp.clone(),
             last_op: op_db.clone(),
@@ -352,7 +352,7 @@ fn record_applied_broker_activity_patch_tx(
         })
         .on_conflict((
             sync_entity_metadata::entity,
-            sync_entity_metadata::entity_id,
+            sync_entity_metadata::subject_id,
         ))
         .do_update()
         .set((
@@ -369,7 +369,7 @@ fn record_applied_broker_activity_patch_tx(
             event_id: patch.event_id.clone(),
             seq: patch.seq,
             entity: entity_db,
-            entity_id: patch.entity_id.clone(),
+            subject_id: patch.subject_id.clone(),
             applied_at: chrono::Utc::now().to_rfc3339(),
         })
         .on_conflict(sync_applied_events::event_id)

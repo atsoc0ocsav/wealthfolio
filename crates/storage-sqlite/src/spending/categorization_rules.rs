@@ -78,7 +78,7 @@ struct PresetRuleDeletionDB {
 
 impl crate::sync::SyncOutboxModel for CategorizationRuleDB {
     const ENTITY: SyncEntity = SyncEntity::SpendingCategorizationRule;
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }
@@ -87,12 +87,12 @@ impl crate::sync::SyncOutboxModel for PresetRuleDeletionDB {
     const ENTITY: SyncEntity = SyncEntity::SpendingPresetRuleDeletion;
 
     // `rule_id` is the deleted categorization rule row. The sync entity ID is
-    // the deterministic composite key returned by `sync_entity_id_owned()`.
-    fn sync_entity_id(&self) -> &str {
+    // the deterministic composite key returned by `sync_subject_id_owned()`.
+    fn sync_subject_id(&self) -> &str {
         &self.rule_id
     }
 
-    fn sync_entity_id_owned(&self) -> String {
+    fn sync_subject_id_owned(&self) -> String {
         preset_rule_deletion_id(&self.preset_id, &self.preset_rule_key)
     }
 }
@@ -640,7 +640,7 @@ mod tests {
     fn outbox_rows(repo: &CategorizationRulesRepository) -> Vec<(String, String, String)> {
         let conn = &mut get_connection(&repo.pool).expect("conn");
         sync_outbox::table
-            .select((sync_outbox::entity, sync_outbox::entity_id, sync_outbox::op))
+            .select((sync_outbox::entity, sync_outbox::subject_id, sync_outbox::op))
             .order(sync_outbox::created_at.asc())
             .load::<(String, String, String)>(conn)
             .expect("load outbox")
@@ -653,10 +653,10 @@ mod tests {
         repo.delete("rule-ca-groceries").await.expect("delete rule");
 
         let rows = outbox_rows(&repo);
-        assert!(rows.iter().any(|(entity, _entity_id, op)| {
+        assert!(rows.iter().any(|(entity, _subject_id, op)| {
             entity == "spending_preset_rule_deletion" && op == "update"
         }));
-        assert!(rows.iter().any(|(entity, _entity_id, op)| {
+        assert!(rows.iter().any(|(entity, _subject_id, op)| {
             entity == "spending_categorization_rule" && op == "delete"
         }));
 
@@ -671,7 +671,7 @@ mod tests {
 
         repo.remove_preset("ca").await.expect("remove preset");
         let rows = outbox_rows(&repo);
-        assert!(rows.iter().any(|(entity, _entity_id, op)| {
+        assert!(rows.iter().any(|(entity, _subject_id, op)| {
             entity == "spending_preset_rule_deletion" && op == "delete"
         }));
 
@@ -686,7 +686,7 @@ mod tests {
     }
 
     #[test]
-    fn preset_rule_deletion_outbox_helper_uses_composite_entity_id() {
+    fn preset_rule_deletion_outbox_helper_uses_composite_subject_id() {
         let deletion = PresetRuleDeletionDB {
             preset_id: "ca".to_string(),
             preset_rule_key: "groceries".to_string(),
@@ -698,9 +698,9 @@ mod tests {
             .expect("outbox");
 
         assert_eq!(
-            request.entity_id,
+            request.subject_id,
             preset_rule_deletion_id("ca", "groceries")
         );
-        assert_ne!(request.entity_id, deletion.rule_id);
+        assert_ne!(request.subject_id, deletion.rule_id);
     }
 }

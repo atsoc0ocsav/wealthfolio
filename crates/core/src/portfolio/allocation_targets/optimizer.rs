@@ -78,7 +78,7 @@ pub struct RebalanceInput {
     #[allow(dead_code)]
     pub avoid_selling_account_ids: Vec<String>,
     /// Max % of portfolio value that can be sold in one plan.
-    pub max_turnover_pct: Option<Decimal>,
+    pub max_turnover_bps: Option<Decimal>,
 }
 
 // ── Trait ─────────────────────────────────────────────────────────────────────
@@ -277,16 +277,16 @@ impl DriftPriorityOptimizer {
         categories: &[CategoryState],
         sell_candidates: &[SellCandidate],
         profile: &RebalanceProfile,
-        max_turnover_pct: Option<Decimal>,
+        max_turnover_bps: Option<Decimal>,
         warnings: &mut Vec<RebalanceWarning>,
     ) -> (HashMap<String, Decimal>, Decimal, Vec<SuggestedManualTrade>) {
         if total_value == Decimal::ZERO || sell_candidates.is_empty() {
             return (values.clone(), Decimal::ZERO, vec![]);
         }
 
-        let turnover_cap_value = max_turnover_pct
+        let turnover_cap_value = max_turnover_bps
             .filter(|p| *p > Decimal::ZERO)
-            .map(|p| total_value * p / dec!(100));
+            .map(|p| total_value * p / dec!(10000));
 
         let scale = dec!(10000);
         let initial_values = values.clone();
@@ -458,7 +458,7 @@ impl DriftPriorityOptimizer {
                         category_id: String::new(),
                         message: format!(
                             "Turnover cap ({:.1}%) reached — {:.2} of {:.2} portfolio already sold.",
-                            max_turnover_pct.unwrap_or_default(),
+                            max_turnover_bps.unwrap_or_default() / dec!(100),
                             cumulative_sold,
                             total_value,
                         ),
@@ -475,7 +475,7 @@ impl DriftPriorityOptimizer {
                                 category_id: String::new(),
                                 message: format!(
                                     "Turnover cap ({:.1}%) reached — {:.2} of {:.2} portfolio already sold.",
-                                    max_turnover_pct.unwrap_or_default(),
+                                    max_turnover_bps.unwrap_or_default(),
                                     cumulative_sold,
                                     total_value,
                                 ),
@@ -845,7 +845,7 @@ impl RebalanceOptimizer for DriftPriorityOptimizer {
             mut warnings,
             do_not_sell_asset_ids: _,
             avoid_selling_account_ids: _,
-            max_turnover_pct,
+            max_turnover_bps,
         } = input;
 
         if total_value == Decimal::ZERO && available_cash == Decimal::ZERO {
@@ -892,7 +892,7 @@ impl RebalanceOptimizer for DriftPriorityOptimizer {
                     &categories,
                     &sell_candidates,
                     &profile,
-                    max_turnover_pct,
+                    max_turnover_bps,
                     &mut warnings,
                 );
                 values = updated_values;
@@ -995,7 +995,7 @@ impl RebalanceOptimizer for DriftPriorityOptimizer {
                         &categories,
                         &sell_candidates,
                         &profile,
-                        max_turnover_pct,
+                        max_turnover_bps,
                         &mut warnings,
                     );
                     values = updated_values;
@@ -1393,7 +1393,7 @@ mod tests {
             warnings: vec![],
             do_not_sell_asset_ids: vec![],
             avoid_selling_account_ids: vec![],
-            max_turnover_pct: None,
+            max_turnover_bps: None,
         }
     }
 
@@ -1495,7 +1495,7 @@ mod tests {
             warnings: vec![],
             do_not_sell_asset_ids: vec![],
             avoid_selling_account_ids: vec![],
-            max_turnover_pct: None,
+            max_turnover_bps: None,
         }
     }
 
@@ -1540,7 +1540,7 @@ mod tests {
         let optimizer = DriftPriorityOptimizer;
         let mut input = make_sell_rebalance_input();
         // Cap at 10% turnover = $1000 max sold out of $10000
-        input.max_turnover_pct = Some(dec!(10));
+        input.max_turnover_bps = Some(dec!(1000));
 
         let plan = optimizer.plan(input).unwrap();
 

@@ -377,25 +377,37 @@ impl RebalanceServiceTrait for RebalanceService {
             input.available_cash
         };
 
-        // Merge persisted sell constraints with per-calculation ones.
-        let persisted = self
+        // Load persisted constraints from DB.
+        let constraints = self
             .allocation_target_service
-            .list_sell_constraints(&input.target_id)
+            .list_target_constraints(&input.target_id)
             .unwrap_or_default();
-        for c in &persisted {
-            match c.entity_type {
-                super::model::SellConstraintEntityType::Asset => {
-                    if !input.do_not_sell_asset_ids.contains(&c.entity_id) {
-                        input.do_not_sell_asset_ids.push(c.entity_id.clone());
-                    }
-                }
-                super::model::SellConstraintEntityType::Account => {
-                    if !input.avoid_selling_account_ids.contains(&c.entity_id) {
-                        input.avoid_selling_account_ids.push(c.entity_id.clone());
-                    }
-                }
-            }
-        }
+        let do_not_sell_asset_ids: Vec<String> = constraints
+            .iter()
+            .filter(|c| {
+                matches!(c.subject_type, super::model::ConstraintSubjectType::Asset)
+                    && matches!(
+                        c.action,
+                        super::model::ConstraintAction::Sell
+                            | super::model::ConstraintAction::Trade
+                    )
+                    && matches!(c.effect, super::model::ConstraintEffect::Block)
+            })
+            .map(|c| c.subject_id.clone())
+            .collect();
+        let avoid_selling_account_ids: Vec<String> = constraints
+            .iter()
+            .filter(|c| {
+                matches!(c.subject_type, super::model::ConstraintSubjectType::Account)
+                    && matches!(
+                        c.action,
+                        super::model::ConstraintAction::Sell
+                            | super::model::ConstraintAction::Trade
+                    )
+                    && matches!(c.effect, super::model::ConstraintEffect::Block)
+            })
+            .map(|c| c.subject_id.clone())
+            .collect();
 
         // Drift report — provides total_value and per-category target/current data.
         let drift = self
@@ -461,8 +473,8 @@ impl RebalanceServiceTrait for RebalanceService {
                 &quantity_by_asset,
             );
 
-            let do_not_sell = &input.do_not_sell_asset_ids;
-            let avoid_selling = &input.avoid_selling_account_ids;
+            let do_not_sell = &do_not_sell_asset_ids;
+            let avoid_selling = &avoid_selling_account_ids;
 
             all_sell
                 .into_iter()
@@ -510,11 +522,10 @@ impl RebalanceServiceTrait for RebalanceService {
             })
             .collect();
 
-        let max_turnover_pct = profile
-            .max_turnover_pct
-            .as_ref()
-            .and_then(|s| Decimal::from_str(s).ok())
-            .filter(|d| *d > Decimal::ZERO);
+        let max_turnover_bps = profile
+            .max_turnover_bps
+            .filter(|&bps| bps > 0)
+            .map(Decimal::from);
 
         let optimizer_input = RebalanceInput {
             profile: RebalanceProfile {
@@ -534,9 +545,9 @@ impl RebalanceServiceTrait for RebalanceService {
             candidates,
             sell_candidates,
             warnings: classification_warnings,
-            do_not_sell_asset_ids: input.do_not_sell_asset_ids,
-            avoid_selling_account_ids: input.avoid_selling_account_ids,
-            max_turnover_pct,
+            do_not_sell_asset_ids,
+            avoid_selling_account_ids,
+            max_turnover_bps,
         };
 
         DriftPriorityOptimizer.plan(optimizer_input)
@@ -577,7 +588,7 @@ mod tests {
             min_trade_amount: "0".to_string(),
             whole_shares_only,
             allow_sells: false,
-            max_turnover_pct: None,
+            max_turnover_bps: None,
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
             archived_at: None,
@@ -836,18 +847,18 @@ mod tests {
         ) -> CoreResult<crate::portfolio::allocation_targets::SaveAllocationTargetResult> {
             unimplemented!()
         }
-        fn list_sell_constraints(
+        fn list_target_constraints(
             &self,
             _: &str,
-        ) -> CoreResult<Vec<crate::portfolio::allocation_targets::RebalanceSellConstraint>>
+        ) -> CoreResult<Vec<crate::portfolio::allocation_targets::AllocationTargetConstraint>>
         {
             Ok(vec![])
         }
-        async fn save_sell_constraints(
+        async fn save_target_constraints(
             &self,
             _: &str,
-            _: Vec<crate::portfolio::allocation_targets::RebalanceSellConstraint>,
-        ) -> CoreResult<Vec<crate::portfolio::allocation_targets::RebalanceSellConstraint>>
+            _: Vec<crate::portfolio::allocation_targets::AllocationTargetConstraint>,
+        ) -> CoreResult<Vec<crate::portfolio::allocation_targets::AllocationTargetConstraint>>
         {
             unimplemented!()
         }
@@ -993,8 +1004,6 @@ mod tests {
             base_currency: "USD".to_string(),
             aggregated_account_id: "agg".to_string(),
             scenario_mode: ScenarioMode::CashFlowOnly,
-            do_not_sell_asset_ids: vec![],
-            avoid_selling_account_ids: vec![],
         }
     }
 

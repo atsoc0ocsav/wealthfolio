@@ -7,7 +7,7 @@ use wealthfolio_core::{
     accounts::AccountPurpose,
     portfolio::allocation_targets::{
         AllocationTarget, AllocationTargetWeight, CalculateRebalancePlanInput, DriftReport,
-        NewAllocationTarget, NewAllocationTargetWeight, RebalancePlan, RebalanceSellConstraint,
+        NewAllocationTarget, NewAllocationTargetWeight, RebalancePlan, AllocationTargetConstraint,
         SaveAllocationTargetResult, ScenarioMode, ScopeType,
     },
     portfolios::AccountScope,
@@ -157,25 +157,25 @@ pub async fn save_allocation_target_with_weights(
 // ── Sell constraints ─────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn list_sell_constraints(
+pub async fn list_target_constraints(
     state: State<'_, Arc<ServiceContext>>,
     target_id: String,
-) -> Result<Vec<RebalanceSellConstraint>, String> {
+) -> Result<Vec<AllocationTargetConstraint>, String> {
     state
         .allocation_target_service()
-        .list_sell_constraints(&target_id)
+        .list_target_constraints(&target_id)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn save_sell_constraints(
+pub async fn save_target_constraints(
     state: State<'_, Arc<ServiceContext>>,
     target_id: String,
-    constraints: Vec<RebalanceSellConstraint>,
-) -> Result<Vec<RebalanceSellConstraint>, String> {
+    constraints: Vec<AllocationTargetConstraint>,
+) -> Result<Vec<AllocationTargetConstraint>, String> {
     state
         .allocation_target_service()
-        .save_sell_constraints(&target_id, constraints)
+        .save_target_constraints(&target_id, constraints)
         .await
         .map_err(|e| e.to_string())
 }
@@ -240,8 +240,6 @@ fn resolve_rebalance_input(
     available_cash: Decimal,
     scenario_mode: ScenarioMode,
     filter: AccountScopeInput,
-    do_not_sell_asset_ids: Vec<String>,
-    avoid_selling_account_ids: Vec<String>,
 ) -> Result<CalculateRebalancePlanInput, String> {
     let filter = filter.into_account_filter()?;
     let base_currency = state.get_base_currency();
@@ -260,8 +258,6 @@ fn resolve_rebalance_input(
         base_currency,
         aggregated_account_id: resolved.scope_id,
         scenario_mode,
-        do_not_sell_asset_ids,
-        avoid_selling_account_ids,
     })
 }
 
@@ -272,8 +268,6 @@ pub async fn calculate_rebalance_plan(
     available_cash: Decimal,
     scenario_mode: Option<ScenarioMode>,
     filter: AccountScopeInput,
-    do_not_sell_asset_ids: Option<Vec<String>>,
-    avoid_selling_account_ids: Option<Vec<String>>,
 ) -> Result<RebalancePlan, String> {
     let input = resolve_rebalance_input(
         &state,
@@ -281,8 +275,6 @@ pub async fn calculate_rebalance_plan(
         available_cash,
         scenario_mode.unwrap_or_default(),
         filter,
-        do_not_sell_asset_ids.unwrap_or_default(),
-        avoid_selling_account_ids.unwrap_or_default(),
     )?;
     state
         .rebalance_service()

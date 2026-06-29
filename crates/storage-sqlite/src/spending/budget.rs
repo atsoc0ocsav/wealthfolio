@@ -56,7 +56,7 @@ pub struct NewBudgetGroupDB {
 
 impl crate::sync::SyncOutboxModel for BudgetGroupDB {
     const ENTITY: SyncEntity = SyncEntity::BudgetGroup;
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 
@@ -92,7 +92,7 @@ pub struct NewBudgetGroupAssignmentDB {
 
 impl crate::sync::SyncOutboxModel for BudgetGroupAssignmentDB {
     const ENTITY: SyncEntity = SyncEntity::BudgetGroupAssignment;
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 
@@ -132,7 +132,7 @@ pub struct NewBudgetTargetDB {
 
 impl crate::sync::SyncOutboxModel for BudgetTargetDB {
     const ENTITY: SyncEntity = SyncEntity::BudgetTarget;
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }
@@ -170,7 +170,7 @@ pub struct NewBudgetRolloverSettingDB {
 
 impl crate::sync::SyncOutboxModel for BudgetRolloverSettingDB {
     const ENTITY: SyncEntity = SyncEntity::BudgetRolloverSetting;
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }

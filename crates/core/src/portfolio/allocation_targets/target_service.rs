@@ -9,7 +9,7 @@ use crate::taxonomies::{Category, TaxonomyServiceTrait};
 
 use super::model::{
     AllocationTarget, AllocationTargetWeight, BandType, NewAllocationTarget,
-    NewAllocationTargetWeight, RebalanceGoal, RebalanceSellConstraint, SaveAllocationTargetResult,
+    NewAllocationTargetWeight, RebalanceGoal, AllocationTargetConstraint, SaveAllocationTargetResult,
 };
 use super::validation::{validate_new_target, validate_weights_sum};
 
@@ -35,12 +35,12 @@ pub trait AllocationTargetRepositoryTrait: Send + Sync {
         weights: Vec<AllocationTargetWeight>,
     ) -> CoreResult<SaveAllocationTargetResult>;
 
-    fn list_sell_constraints(&self, target_id: &str) -> CoreResult<Vec<RebalanceSellConstraint>>;
-    async fn save_sell_constraints(
+    fn list_target_constraints(&self, target_id: &str) -> CoreResult<Vec<AllocationTargetConstraint>>;
+    async fn save_target_constraints(
         &self,
         target_id: &str,
-        constraints: Vec<RebalanceSellConstraint>,
-    ) -> CoreResult<Vec<RebalanceSellConstraint>>;
+        constraints: Vec<AllocationTargetConstraint>,
+    ) -> CoreResult<Vec<AllocationTargetConstraint>>;
 }
 
 // ── Service trait ─────────────────────────────────────────────────────────────
@@ -71,12 +71,12 @@ pub trait AllocationTargetServiceTrait: Send + Sync {
         weights: Vec<NewAllocationTargetWeight>,
     ) -> CoreResult<SaveAllocationTargetResult>;
 
-    fn list_sell_constraints(&self, target_id: &str) -> CoreResult<Vec<RebalanceSellConstraint>>;
-    async fn save_sell_constraints(
+    fn list_target_constraints(&self, target_id: &str) -> CoreResult<Vec<AllocationTargetConstraint>>;
+    async fn save_target_constraints(
         &self,
         target_id: &str,
-        constraints: Vec<RebalanceSellConstraint>,
-    ) -> CoreResult<Vec<RebalanceSellConstraint>>;
+        constraints: Vec<AllocationTargetConstraint>,
+    ) -> CoreResult<Vec<AllocationTargetConstraint>>;
 }
 
 // ── Implementation ────────────────────────────────────────────────────────────
@@ -234,10 +234,10 @@ impl AllocationTargetService {
                 .allow_sells
                 .or_else(|| existing.as_ref().map(|target| target.allow_sells))
                 .unwrap_or(false),
-            max_turnover_pct: input.max_turnover_pct.or_else(|| {
+            max_turnover_bps: input.max_turnover_bps.or_else(|| {
                 existing
                     .as_ref()
-                    .and_then(|target| target.max_turnover_pct.clone())
+                    .and_then(|target| target.max_turnover_bps.clone())
             }),
             created_at: existing
                 .as_ref()
@@ -306,7 +306,7 @@ impl AllocationTargetServiceTrait for AllocationTargetService {
             min_trade_amount: input.min_trade_amount.unwrap_or_else(|| "0".to_string()),
             whole_shares_only: input.whole_shares_only.unwrap_or(false),
             allow_sells: input.allow_sells.unwrap_or(false),
-            max_turnover_pct: input.max_turnover_pct,
+            max_turnover_bps: input.max_turnover_bps,
             created_at: now.clone(),
             updated_at: now,
             archived_at: None,
@@ -353,7 +353,7 @@ impl AllocationTargetServiceTrait for AllocationTargetService {
                 .whole_shares_only
                 .unwrap_or(existing.whole_shares_only),
             allow_sells: input.allow_sells.unwrap_or(existing.allow_sells),
-            max_turnover_pct: input.max_turnover_pct.or(existing.max_turnover_pct),
+            max_turnover_bps: input.max_turnover_bps.or(existing.max_turnover_bps),
             created_at: existing.created_at,
             updated_at: Self::now(),
             archived_at: existing.archived_at,
@@ -444,21 +444,21 @@ impl AllocationTargetServiceTrait for AllocationTargetService {
             .await
     }
 
-    fn list_sell_constraints(&self, target_id: &str) -> CoreResult<Vec<RebalanceSellConstraint>> {
-        self.repository.list_sell_constraints(target_id)
+    fn list_target_constraints(&self, target_id: &str) -> CoreResult<Vec<AllocationTargetConstraint>> {
+        self.repository.list_target_constraints(target_id)
     }
 
-    async fn save_sell_constraints(
+    async fn save_target_constraints(
         &self,
         target_id: &str,
-        constraints: Vec<RebalanceSellConstraint>,
-    ) -> CoreResult<Vec<RebalanceSellConstraint>> {
+        constraints: Vec<AllocationTargetConstraint>,
+    ) -> CoreResult<Vec<AllocationTargetConstraint>> {
         self.repository
             .get_target(target_id)?
             .ok_or_else(|| Self::target_not_found(target_id))?;
 
         self.repository
-            .save_sell_constraints(target_id, constraints)
+            .save_target_constraints(target_id, constraints)
             .await
     }
 }
@@ -521,7 +521,7 @@ mod tests {
             min_trade_amount: "0".to_string(),
             whole_shares_only: false,
             allow_sells: false,
-            max_turnover_pct: None,
+            max_turnover_bps: None,
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
             archived_at: None,
@@ -542,7 +542,7 @@ mod tests {
             min_trade_amount: Some("0".to_string()),
             whole_shares_only: Some(false),
             allow_sells: None,
-            max_turnover_pct: None,
+            max_turnover_bps: None,
         }
     }
 
@@ -610,18 +610,18 @@ mod tests {
             Ok(SaveAllocationTargetResult { target, weights })
         }
 
-        fn list_sell_constraints(
+        fn list_target_constraints(
             &self,
             _target_id: &str,
-        ) -> CoreResult<Vec<RebalanceSellConstraint>> {
+        ) -> CoreResult<Vec<AllocationTargetConstraint>> {
             Ok(vec![])
         }
 
-        async fn save_sell_constraints(
+        async fn save_target_constraints(
             &self,
             _target_id: &str,
-            constraints: Vec<RebalanceSellConstraint>,
-        ) -> CoreResult<Vec<RebalanceSellConstraint>> {
+            constraints: Vec<AllocationTargetConstraint>,
+        ) -> CoreResult<Vec<AllocationTargetConstraint>> {
             Ok(constraints)
         }
     }

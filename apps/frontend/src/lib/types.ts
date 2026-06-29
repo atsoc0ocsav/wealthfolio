@@ -2452,7 +2452,7 @@ export interface AllocationTarget {
   minTradeAmount: string;
   wholeSharesOnly: boolean;
   allowSells: boolean;
-  maxTurnoverPct?: string | null;
+  maxTurnoverBps?: number | null;
   createdAt: string;
   updatedAt: string;
   archivedAt?: string | null;
@@ -2471,7 +2471,7 @@ export interface NewAllocationTarget {
   minTradeAmount?: string;
   wholeSharesOnly?: boolean;
   allowSells?: boolean;
-  maxTurnoverPct?: string | null;
+  maxTurnoverBps?: number | null;
 }
 
 export interface AllocationTargetWeight {
@@ -2498,14 +2498,21 @@ export interface SaveAllocationTargetResult {
   weights: AllocationTargetWeight[];
 }
 
-export type SellConstraintEntityType = "asset" | "account";
+export type ConstraintSubjectType = "asset" | "account" | "category";
+export type ConstraintAction = "buy" | "sell" | "trade";
+export type ConstraintEffect = "block" | "avoid";
 
-export interface RebalanceSellConstraint {
+export interface AllocationTargetConstraint {
   id: string;
   targetId: string;
-  entityType: SellConstraintEntityType;
-  entityId: string;
+  subjectType: ConstraintSubjectType;
+  subjectId: string;
+  action: ConstraintAction;
+  effect: ConstraintEffect;
+  reason?: string | null;
+  metadataJson?: string | null;
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface DriftRow {

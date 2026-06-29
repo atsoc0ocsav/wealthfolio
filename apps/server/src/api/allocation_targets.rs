@@ -11,9 +11,9 @@ use serde::Deserialize;
 use wealthfolio_core::{
     accounts::AccountPurpose,
     portfolio::allocation_targets::{
-        AllocationTarget, AllocationTargetWeight, CalculateRebalancePlanInput, DriftReport,
-        NewAllocationTarget, NewAllocationTargetWeight, RebalancePlan, RebalanceSellConstraint,
-        SaveAllocationTargetResult, ScenarioMode, ScopeType,
+        AllocationTarget, AllocationTargetConstraint, AllocationTargetWeight,
+        CalculateRebalancePlanInput, DriftReport, NewAllocationTarget, NewAllocationTargetWeight,
+        RebalancePlan, SaveAllocationTargetResult, ScenarioMode, ScopeType,
     },
     portfolios::AccountScope,
 };
@@ -208,10 +208,6 @@ struct CalculatePlanBody {
     #[serde(default)]
     scenario_mode: ScenarioMode,
     filter: AccountScope,
-    #[serde(default)]
-    do_not_sell_asset_ids: Vec<String>,
-    #[serde(default)]
-    avoid_selling_account_ids: Vec<String>,
 }
 
 fn resolve_rebalance_input(
@@ -220,8 +216,6 @@ fn resolve_rebalance_input(
     available_cash: Decimal,
     scenario_mode: ScenarioMode,
     filter: &AccountScope,
-    do_not_sell_asset_ids: Vec<String>,
-    avoid_selling_account_ids: Vec<String>,
 ) -> ApiResult<CalculateRebalancePlanInput> {
     let base_currency = state.base_currency.read().unwrap().clone();
     let resolved = state
@@ -235,8 +229,6 @@ fn resolve_rebalance_input(
         base_currency,
         aggregated_account_id: resolved.scope_id,
         scenario_mode,
-        do_not_sell_asset_ids,
-        avoid_selling_account_ids,
     })
 }
 
@@ -250,8 +242,6 @@ async fn calculate_plan(
         body.available_cash,
         body.scenario_mode,
         &body.filter,
-        body.do_not_sell_asset_ids,
-        body.avoid_selling_account_ids,
     )?;
     let plan = state.rebalance_service.calculate_plan(input).await?;
     Ok(Json(plan))
@@ -259,24 +249,24 @@ async fn calculate_plan(
 
 // ── Sell constraints ─────────────────────────────────────────────────────────
 
-async fn list_sell_constraints_handler(
+async fn list_target_constraints_handler(
     State(state): State<Arc<AppState>>,
     Path(target_id): Path<String>,
-) -> ApiResult<Json<Vec<RebalanceSellConstraint>>> {
+) -> ApiResult<Json<Vec<AllocationTargetConstraint>>> {
     let constraints = state
         .allocation_target_service
-        .list_sell_constraints(&target_id)?;
+        .list_target_constraints(&target_id)?;
     Ok(Json(constraints))
 }
 
-async fn save_sell_constraints_handler(
+async fn save_target_constraints_handler(
     State(state): State<Arc<AppState>>,
     Path(target_id): Path<String>,
-    Json(constraints): Json<Vec<RebalanceSellConstraint>>,
-) -> ApiResult<Json<Vec<RebalanceSellConstraint>>> {
+    Json(constraints): Json<Vec<AllocationTargetConstraint>>,
+) -> ApiResult<Json<Vec<AllocationTargetConstraint>>> {
     let saved = state
         .allocation_target_service
-        .save_sell_constraints(&target_id, constraints)
+        .save_target_constraints(&target_id, constraints)
         .await?;
     Ok(Json(saved))
 }
@@ -301,7 +291,7 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route(
             "/allocation-targets/{id}/sell-constraints",
-            get(list_sell_constraints_handler).post(save_sell_constraints_handler),
+            get(list_target_constraints_handler).post(save_target_constraints_handler),
         )
         .route("/allocation-targets/{id}/drift", post(get_drift_for_target))
         .route(

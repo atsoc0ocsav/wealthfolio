@@ -12,7 +12,7 @@ use crate::sync::SyncOutboxModel;
 #[derive(Debug, Clone)]
 pub(crate) struct ProjectedChange {
     pub entity: SyncEntity,
-    pub entity_id: String,
+    pub subject_id: String,
     pub op: SyncOperation,
     pub payload: Value,
 }
@@ -21,24 +21,24 @@ impl ProjectedChange {
     pub(crate) fn for_model<T: SyncOutboxModel>(model: &T, op: SyncOperation) -> Result<Self> {
         Ok(Self {
             entity: T::ENTITY,
-            entity_id: model.sync_entity_id_owned(),
+            subject_id: model.sync_subject_id_owned(),
             op,
             payload: serde_json::to_value(model)?,
         })
     }
 
-    pub(crate) fn delete_for_model<T: SyncOutboxModel>(entity_id: impl Into<String>) -> Self {
-        let entity_id = entity_id.into();
+    pub(crate) fn delete_for_model<T: SyncOutboxModel>(subject_id: impl Into<String>) -> Self {
+        let subject_id = subject_id.into();
         Self {
             entity: T::ENTITY,
-            entity_id: entity_id.clone(),
+            subject_id: subject_id.clone(),
             op: SyncOperation::Delete,
-            payload: T::delete_payload(&entity_id),
+            payload: T::delete_payload(&subject_id),
         }
     }
 
     fn into_outbox_request(self) -> OutboxWriteRequest {
-        OutboxWriteRequest::new(self.entity, self.entity_id, self.op, self.payload)
+        OutboxWriteRequest::new(self.entity, self.subject_id, self.op, self.payload)
     }
 }
 

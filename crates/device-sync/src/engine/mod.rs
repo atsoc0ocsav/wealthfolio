@@ -48,10 +48,10 @@ pub fn backoff_seconds(consecutive_failures: i32) -> i64 {
     2_i64.pow(capped as u32) * BASE_DELAY_SECONDS
 }
 
-fn remote_entity_id_is_valid(_entity: &SyncEntity, entity_id: &str) -> bool {
-    !entity_id.is_empty()
-        && entity_id.len() <= MAX_REMOTE_ENTITY_ID_LEN
-        && entity_id
+fn remote_subject_id_is_valid(_entity: &SyncEntity, subject_id: &str) -> bool {
+    !subject_id.is_empty()
+        && subject_id.len() <= MAX_REMOTE_ENTITY_ID_LEN
+        && subject_id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b':' | b'-'))
 }
@@ -82,7 +82,7 @@ fn sync_entity_name(entity: &SyncEntity) -> &'static str {
         SyncEntity::PortfolioAccount => "portfolio_account",
         SyncEntity::AllocationTarget => "allocation_target",
         SyncEntity::AllocationTargetWeight => "allocation_target_weight",
-        SyncEntity::RebalanceSellConstraint => "rebalance_sell_constraint",
+        SyncEntity::AllocationTargetConstraint => "rebalance_target_constraint",
         SyncEntity::SpendingSetting => "spending_setting",
         SyncEntity::ActivityTaxonomyAssignment => "activity_taxonomy_assignment",
         SyncEntity::SpendingActivitySplit => "spending_activity_split",
@@ -444,21 +444,21 @@ where
     );
     let mut push_events = Vec::new();
     let mut push_event_ids = Vec::new();
-    let mut invalid_entity_id_event_ids = Vec::new();
+    let mut invalid_subject_id_event_ids = Vec::new();
     let mut max_retry_count = 0;
     let current_key_version = identity.key_version.unwrap_or(1).max(1);
     let mut stale_key_version_event_ids = Vec::new();
     let mut future_key_version_event_ids = Vec::new();
 
     for event in pending {
-        if !remote_entity_id_is_valid(&event.entity, &event.entity_id) {
+        if !remote_subject_id_is_valid(&event.entity, &event.subject_id) {
             warn!(
-                "[DeviceSync] Marking outbox event dead due to invalid entity_id (event_id={}, entity={:?}, entity_id={})",
+                "[DeviceSync] Marking outbox event dead due to invalid subject_id (event_id={}, entity={:?}, subject_id={})",
                 event.event_id,
                 event.entity,
-                event.entity_id
+                event.subject_id
             );
-            invalid_entity_id_event_ids.push(event.event_id.clone());
+            invalid_subject_id_event_ids.push(event.event_id.clone());
             continue;
         }
         max_retry_count = max_retry_count.max(event.retry_count);
@@ -492,19 +492,19 @@ where
             device_id: device_id.clone(),
             event_type,
             entity: event.entity,
-            entity_id: event.entity_id,
+            subject_id: event.subject_id,
             client_timestamp: event.client_timestamp,
             payload: encrypted_payload,
             payload_key_version,
         });
     }
 
-    if !invalid_entity_id_event_ids.is_empty() {
+    if !invalid_subject_id_event_ids.is_empty() {
         ports
             .mark_outbox_dead(
-                invalid_entity_id_event_ids,
-                Some("Remote sync requires a valid entity_id".to_string()),
-                Some("invalid_entity_id".to_string()),
+                invalid_subject_id_event_ids,
+                Some("Remote sync requires a valid subject_id".to_string()),
+                Some("invalid_subject_id".to_string()),
             )
             .await
             .map_err(|e| e.to_string())?;
@@ -844,7 +844,7 @@ where
 
                 decoded_events.push(ReplayEvent {
                     entity: local_entity,
-                    entity_id: remote_event.entity_id,
+                    subject_id: remote_event.subject_id,
                     op: local_op,
                     event_id: remote_event.event_id,
                     client_timestamp: remote_event.client_timestamp,
@@ -877,9 +877,9 @@ where
                             Err(event_err) => {
                                 dead_lettered += 1;
                                 log::error!(
-                                    "[DeviceSync] Dead-lettering replay event due to apply error: entity={:?} entity_id={} op={:?} event_id={} seq={} error={}",
+                                    "[DeviceSync] Dead-lettering replay event due to apply error: entity={:?} subject_id={} op={:?} event_id={} seq={} error={}",
                                     event.entity,
-                                    event.entity_id,
+                                    event.subject_id,
                                     event.op,
                                     event.event_id,
                                     event.seq,
@@ -1883,7 +1883,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_entity_id_validation_allows_bounded_safe_keys() {
+    fn remote_subject_id_validation_allows_bounded_safe_keys() {
         let accepted_ids = [
             "019cb093-06a8-7534-8677-546317b17957",
             "spending.enabled",
@@ -1896,10 +1896,10 @@ mod tests {
             "budget_rollover_setting:group:36:019cb093-06a8-7534-8677-546317b17957",
             "spending_categorization_rule:preset:9:groceries:6:rule_1",
         ];
-        for entity_id in accepted_ids {
+        for subject_id in accepted_ids {
             assert!(
-                remote_entity_id_is_valid(&SyncEntity::Account, entity_id),
-                "expected entity_id to be valid: {entity_id}"
+                remote_subject_id_is_valid(&SyncEntity::Account, subject_id),
+                "expected subject_id to be valid: {subject_id}"
             );
         }
 
@@ -1912,10 +1912,10 @@ mod tests {
         ];
         rejected_ids.push("a".repeat(MAX_REMOTE_ENTITY_ID_LEN + 1));
 
-        for entity_id in rejected_ids {
+        for subject_id in rejected_ids {
             assert!(
-                !remote_entity_id_is_valid(&SyncEntity::Account, &entity_id),
-                "expected entity_id to be invalid: {entity_id}"
+                !remote_subject_id_is_valid(&SyncEntity::Account, &subject_id),
+                "expected subject_id to be invalid: {subject_id}"
             );
         }
     }
@@ -1990,13 +1990,13 @@ mod tests {
 
     fn outbox_event(
         event_id: &str,
-        entity_id: &str,
+        subject_id: &str,
         payload_key_version: i32,
     ) -> wealthfolio_core::sync::SyncOutboxEvent {
         wealthfolio_core::sync::SyncOutboxEvent {
             event_id: event_id.to_string(),
             entity: SyncEntity::Account,
-            entity_id: entity_id.to_string(),
+            subject_id: subject_id.to_string(),
             op: SyncOperation::Update,
             client_timestamp: "2026-03-02T00:00:00Z".to_string(),
             payload: "{}".to_string(),
@@ -2023,7 +2023,7 @@ mod tests {
         event_id: &str,
         entity: &str,
         event_type: &str,
-        entity_id: &str,
+        subject_id: &str,
         seq: i64,
         payload: &str,
     ) -> crate::SyncEvent {
@@ -2032,7 +2032,7 @@ mod tests {
             device_id: "device-remote".to_string(),
             event_type: event_type.to_string(),
             entity: entity.to_string(),
-            entity_id: entity_id.to_string(),
+            subject_id: subject_id.to_string(),
             client_timestamp: "2026-05-25T00:00:00Z".to_string(),
             payload: payload.to_string(),
             payload_key_version: 1,
@@ -2124,7 +2124,7 @@ mod tests {
         let applied_events = ports.applied_events.lock().await;
         assert_eq!(applied_events.len(), 1);
         assert_eq!(applied_events[0].entity, SyncEntity::Account);
-        assert_eq!(applied_events[0].entity_id, "account-1");
+        assert_eq!(applied_events[0].subject_id, "account-1");
         assert_eq!(applied_events[0].op, SyncOperation::Update);
         assert_eq!(applied_events[0].event_id, "evt-account-1");
     }

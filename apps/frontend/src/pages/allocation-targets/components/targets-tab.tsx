@@ -285,7 +285,7 @@ function TargetEditor({
   );
   const [minTradeAmount, setMinTradeAmount] = useState(target?.minTradeAmount ?? "0");
   const [wholeSharesOnly, setWholeSharesOnly] = useState(target?.wholeSharesOnly ?? false);
-  const [maxTurnoverPct, setMaxTurnoverPct] = useState(target?.maxTurnoverPct ?? "");
+  const [maxTurnoverPctDisplay, setMaxTurnoverPctDisplay] = useState(target?.maxTurnoverBps != null ? String(target.maxTurnoverBps / 100) : "");
   const [weights, setWeights] = useState<WeightDraft[]>([]);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -366,7 +366,7 @@ function TargetEditor({
       setRebalanceGoal(target?.rebalanceGoal ?? "nearest_band");
       setMinTradeAmount(target?.minTradeAmount ?? "0");
       setWholeSharesOnly(target?.wholeSharesOnly ?? false);
-      setMaxTurnoverPct(target?.maxTurnoverPct ?? "");
+      setMaxTurnoverPctDisplay(target?.maxTurnoverBps != null ? String(target.maxTurnoverBps / 100) : "");
     } else {
       setTaxonomyId("asset_classes");
       setStartId("current");
@@ -379,7 +379,7 @@ function TargetEditor({
       setRebalanceGoal("nearest_band");
       setMinTradeAmount("0");
       setWholeSharesOnly(false);
-      setMaxTurnoverPct("");
+      setMaxTurnoverPctDisplay("");
     }
     setWeights([]);
     setHasUnsavedChanges(false);
@@ -474,7 +474,7 @@ function TargetEditor({
         rebalanceGoal,
         minTradeAmount: minTradeAmount === "" ? "0" : minTradeAmount,
         wholeSharesOnly,
-        maxTurnoverPct: maxTurnoverPct === "" ? null : maxTurnoverPct,
+        maxTurnoverBps: maxTurnoverPctDisplay === "" ? null : Math.round(parseFloat(maxTurnoverPctDisplay) * 100),
       } as const;
 
       const saved = await saveTarget.mutateAsync({
@@ -511,7 +511,7 @@ function TargetEditor({
       setRebalanceGoal(target.rebalanceGoal ?? "nearest_band");
       setMinTradeAmount(target.minTradeAmount ?? "0");
       setWholeSharesOnly(target.wholeSharesOnly ?? false);
-      setMaxTurnoverPct(target.maxTurnoverPct ?? "");
+      setMaxTurnoverPctDisplay(target.maxTurnoverBps != null ? String(target.maxTurnoverBps / 100) : "");
       if (savedWeightDrafts) setWeights(savedWeightDrafts);
     } else {
       setTaxonomyId("asset_classes");
@@ -799,9 +799,9 @@ function TargetEditor({
                     min="0"
                     max="100"
                     step="0.1"
-                    value={maxTurnoverPct}
+                    value={maxTurnoverPctDisplay}
                     onChange={(e) => {
-                      setMaxTurnoverPct(e.target.value);
+                      setMaxTurnoverPctDisplay(e.target.value);
                       markDirty();
                     }}
                     placeholder="No limit"

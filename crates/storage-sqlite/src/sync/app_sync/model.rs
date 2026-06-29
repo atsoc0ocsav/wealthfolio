@@ -21,7 +21,7 @@ pub struct SyncAppliedEventDB {
     pub event_id: String,
     pub seq: i64,
     pub entity: String,
-    pub entity_id: String,
+    pub subject_id: String,
     pub applied_at: String,
 }
 
@@ -102,12 +102,12 @@ pub struct SyncEngineStateDB {
     Serialize,
     Deserialize,
 )]
-#[diesel(primary_key(entity, entity_id))]
+#[diesel(primary_key(entity, subject_id))]
 #[diesel(table_name = crate::schema::sync_entity_metadata)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
 pub struct SyncEntityMetadataDB {
     pub entity: String,
-    pub entity_id: String,
+    pub subject_id: String,
     pub last_event_id: String,
     pub last_client_timestamp: String,
     pub last_op: String,
@@ -131,7 +131,7 @@ pub struct SyncEntityMetadataDB {
 pub struct SyncOutboxEventDB {
     pub event_id: String,
     pub entity: String,
-    pub entity_id: String,
+    pub subject_id: String,
     pub op: String,
     pub client_timestamp: String,
     pub payload: String,

@@ -11,8 +11,6 @@ export interface RebalancePlanParams {
   scenarioMode: ScenarioMode;
   /** Snapshot of the portfolio source (available cash + holdings version) at calc time, for staleness detection. */
   sourceKey: string;
-  doNotSellAssetIds: string[];
-  avoidSellingAccountIds: string[];
 }
 
 export interface CachedRebalancePlan {
@@ -34,8 +32,6 @@ export function useRebalancePlan(params: RebalancePlanParams) {
       accountScopeKey(params.filter),
       params.scenarioMode,
       params.cash,
-      params.doNotSellAssetIds,
-      params.avoidSellingAccountIds,
     ],
     queryFn: async (): Promise<CachedRebalancePlan> => {
       const plan = await calculateRebalancePlan(
@@ -43,8 +39,6 @@ export function useRebalancePlan(params: RebalancePlanParams) {
         params.cash,
         params.filter,
         params.scenarioMode,
-        params.doNotSellAssetIds,
-        params.avoidSellingAccountIds,
       );
       return { plan, sourceKey: params.sourceKey };
     },

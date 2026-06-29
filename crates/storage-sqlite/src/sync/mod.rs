@@ -80,20 +80,20 @@ pub fn should_sync_outbox_for_snapshot_source(source: SnapshotSource) -> bool {
 pub trait SyncOutboxModel: Serialize {
     const ENTITY: SyncEntity;
     /// Borrowed single-column row identifier. Generic outbox writers use
-    /// `sync_entity_id_owned()` so composite-key models can override the sync ID.
-    fn sync_entity_id(&self) -> &str;
+    /// `sync_subject_id_owned()` so composite-key models can override the sync ID.
+    fn sync_subject_id(&self) -> &str;
     /// Returns the entity ID as an owned String. Override for composite PKs.
-    fn sync_entity_id_owned(&self) -> String {
-        self.sync_entity_id().to_string()
+    fn sync_subject_id_owned(&self) -> String {
+        self.sync_subject_id().to_string()
     }
     fn should_sync_outbox(&self, _op: SyncOperation) -> bool {
         true
     }
-    fn should_sync_outbox_delete(_entity_id: &str) -> bool {
+    fn should_sync_outbox_delete(_subject_id: &str) -> bool {
         true
     }
-    fn delete_payload(entity_id: &str) -> serde_json::Value {
-        serde_json::json!({ "id": entity_id })
+    fn delete_payload(subject_id: &str) -> serde_json::Value {
+        serde_json::json!({ "id": subject_id })
     }
 }
 
@@ -103,21 +103,21 @@ pub fn outbox_request_for_model<T: SyncOutboxModel>(
 ) -> Result<OutboxWriteRequest> {
     Ok(OutboxWriteRequest::new(
         T::ENTITY,
-        model.sync_entity_id_owned(),
+        model.sync_subject_id_owned(),
         op,
         serde_json::to_value(model)?,
     ))
 }
 
 pub fn outbox_delete_request_for_model<T: SyncOutboxModel>(
-    entity_id: impl Into<String>,
+    subject_id: impl Into<String>,
 ) -> OutboxWriteRequest {
-    let entity_id = entity_id.into();
+    let subject_id = subject_id.into();
     OutboxWriteRequest::new(
         T::ENTITY,
-        entity_id.clone(),
+        subject_id.clone(),
         SyncOperation::Delete,
-        T::delete_payload(&entity_id),
+        T::delete_payload(&subject_id),
     )
 }
 

@@ -1229,8 +1229,6 @@ export function RebalanceTab({
     filter: accountScope,
     scenarioMode,
     sourceKey,
-    doNotSellAssetIds: [],
-    avoidSellingAccountIds: [],
   });
   const cachedPlan = planQuery.data ?? null;
   const hasStalePlan = !!cachedPlan && cachedPlan.sourceKey !== sourceKey;

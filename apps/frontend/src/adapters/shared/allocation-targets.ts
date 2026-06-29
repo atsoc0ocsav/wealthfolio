@@ -7,7 +7,7 @@ import type {
   AllocationTarget,
   SaveAllocationTargetResult,
   RebalancePlan,
-  RebalanceSellConstraint,
+  AllocationTargetConstraint,
   ScenarioMode,
 } from "@/lib/types";
 
@@ -87,15 +87,17 @@ export const getAllocationTargetDrift = async (
 
 // ── Sell constraints ─────────────────────────────────────────────────────────
 
-export const listSellConstraints = async (targetId: string): Promise<RebalanceSellConstraint[]> => {
-  return invoke<RebalanceSellConstraint[]>("list_sell_constraints", { targetId });
+export const listTargetConstraints = async (
+  targetId: string,
+): Promise<AllocationTargetConstraint[]> => {
+  return invoke<AllocationTargetConstraint[]>("list_target_constraints", { targetId });
 };
 
-export const saveSellConstraints = async (
+export const saveTargetConstraints = async (
   targetId: string,
-  constraints: RebalanceSellConstraint[],
-): Promise<RebalanceSellConstraint[]> => {
-  return invoke<RebalanceSellConstraint[]>("save_sell_constraints", {
+  constraints: AllocationTargetConstraint[],
+): Promise<AllocationTargetConstraint[]> => {
+  return invoke<AllocationTargetConstraint[]>("save_target_constraints", {
     targetId,
     constraints,
   });
@@ -108,15 +110,11 @@ export const calculateRebalancePlan = async (
   availableCash: number,
   filter: AccountScope,
   scenarioMode: ScenarioMode = "cash_flow_only",
-  doNotSellAssetIds: string[] = [],
-  avoidSellingAccountIds: string[] = [],
 ): Promise<RebalancePlan> => {
   return invoke<RebalancePlan>("calculate_rebalance_plan", {
     targetId,
     availableCash,
     filter,
     scenarioMode,
-    doNotSellAssetIds,
-    avoidSellingAccountIds,
   });
 };

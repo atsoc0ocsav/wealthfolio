@@ -60,7 +60,7 @@ pub struct SyncReadyReconcileResult {
 #[derive(Debug, Clone)]
 pub struct ReplayEvent {
     pub entity: SyncEntity,
-    pub entity_id: String,
+    pub subject_id: String,
     pub op: SyncOperation,
     pub event_id: String,
     pub client_timestamp: String,

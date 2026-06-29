@@ -111,7 +111,7 @@ impl ReplayStore for SqliteSyncEngineDbPorts {
                     .map(|event| {
                         (
                             event.entity,
-                            event.entity_id,
+                            event.subject_id,
                             event.op,
                             event.event_id,
                             event.client_timestamp,
@@ -129,7 +129,7 @@ impl ReplayStore for SqliteSyncEngineDbPorts {
         self.repository
             .apply_remote_event_lww(
                 event.entity,
-                event.entity_id,
+                event.subject_id,
                 event.op,
                 event.event_id,
                 event.client_timestamp,

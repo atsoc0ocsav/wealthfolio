@@ -375,11 +375,11 @@ fn load_payload_column_catalog(
     Ok(catalog)
 }
 
-fn payload_value_matches_entity_id(value: &serde_json::Value, entity_id: &str) -> bool {
+fn payload_value_matches_subject_id(value: &serde_json::Value, subject_id: &str) -> bool {
     match value {
-        serde_json::Value::String(v) => v == entity_id,
-        serde_json::Value::Number(v) => v.to_string() == entity_id,
-        serde_json::Value::Bool(v) => v.to_string() == entity_id,
+        serde_json::Value::String(v) => v == subject_id,
+        serde_json::Value::Number(v) => v.to_string() == subject_id,
+        serde_json::Value::Bool(v) => v.to_string() == subject_id,
         _ => false,
     }
 }
@@ -932,7 +932,7 @@ fn entity_storage_mapping(entity: &SyncEntity) -> Option<(&'static str, &'static
         SyncEntity::PortfolioAccount => Some(("portfolio_accounts", "id")),
         SyncEntity::AllocationTarget => Some(("allocation_targets", "id")),
         SyncEntity::AllocationTargetWeight => Some(("allocation_target_weights", "id")),
-        SyncEntity::RebalanceSellConstraint => Some(("rebalance_sell_constraints", "id")),
+        SyncEntity::AllocationTargetConstraint => Some(("allocation_target_constraints", "id")),
         SyncEntity::SpendingSetting => Some(("app_settings", "setting_key")),
         // CustomTaxonomy uses bundle replay — handled by custom branch in apply_remote_event_lww_tx
         SyncEntity::CustomTaxonomy => None,
@@ -954,7 +954,7 @@ fn entity_storage_mapping(entity: &SyncEntity) -> Option<(&'static str, &'static
 
 fn replay_apply_error(
     entity: SyncEntity,
-    entity_id: &str,
+    subject_id: &str,
     op: SyncOperation,
     event_id: &str,
     seq: i64,
@@ -964,7 +964,7 @@ fn replay_apply_error(
         .map(|(table, pk)| format!(" table={table} pk={pk}"))
         .unwrap_or_default();
     let message = format!(
-        "Replay apply failed for entity={entity:?}{table_context} entity_id={entity_id} op={op:?} event_id={event_id} seq={seq}: {err}"
+        "Replay apply failed for entity={entity:?}{table_context} subject_id={subject_id} op={op:?} event_id={event_id} seq={seq}: {err}"
     );
     if is_foreign_key_error_message(&message) {
         Error::Database(DatabaseError::ForeignKeyViolation(message))
@@ -1135,7 +1135,7 @@ fn restore_sql_error(phase: &str, table: &str, err: diesel::result::Error) -> Er
 pub struct OutboxWriteRequest {
     pub event_id: Option<String>,
     pub entity: SyncEntity,
-    pub entity_id: String,
+    pub subject_id: String,
     pub op: SyncOperation,
     pub client_timestamp: String,
     pub payload: serde_json::Value,
@@ -1145,14 +1145,14 @@ pub struct OutboxWriteRequest {
 impl OutboxWriteRequest {
     pub fn new(
         entity: SyncEntity,
-        entity_id: impl Into<String>,
+        subject_id: impl Into<String>,
         op: SyncOperation,
         payload: serde_json::Value,
     ) -> Self {
         Self {
             event_id: None,
             entity,
-            entity_id: entity_id.into(),
+            subject_id: subject_id.into(),
             op,
             client_timestamp: Utc::now().to_rfc3339(),
             payload,
@@ -1194,7 +1194,7 @@ fn resolve_local_device_id(conn: &mut SqliteConnection) -> Option<String> {
 fn upsert_entity_metadata_tx(
     conn: &mut SqliteConnection,
     entity: SyncEntity,
-    entity_id: &str,
+    subject_id: &str,
     event_id: &str,
     client_timestamp: &str,
     op: SyncOperation,
@@ -1205,7 +1205,7 @@ fn upsert_entity_metadata_tx(
     diesel::insert_into(sync_entity_metadata::table)
         .values(SyncEntityMetadataDB {
             entity: entity_db,
-            entity_id: entity_id.to_string(),
+            subject_id: subject_id.to_string(),
             last_event_id: event_id.to_string(),
             last_client_timestamp: client_timestamp.to_string(),
             last_op: op_db.clone(),
@@ -1213,7 +1213,7 @@ fn upsert_entity_metadata_tx(
         })
         .on_conflict((
             sync_entity_metadata::entity,
-            sync_entity_metadata::entity_id,
+            sync_entity_metadata::subject_id,
         ))
         .do_update()
         .set((
@@ -1230,7 +1230,7 @@ fn upsert_entity_metadata_tx(
 fn upsert_entity_metadata_preserving_seq_tx(
     conn: &mut SqliteConnection,
     entity: SyncEntity,
-    entity_id: &str,
+    subject_id: &str,
     event_id: &str,
     client_timestamp: &str,
     op: SyncOperation,
@@ -1240,7 +1240,7 @@ fn upsert_entity_metadata_preserving_seq_tx(
     diesel::insert_into(sync_entity_metadata::table)
         .values(SyncEntityMetadataDB {
             entity: entity_db,
-            entity_id: entity_id.to_string(),
+            subject_id: subject_id.to_string(),
             last_event_id: event_id.to_string(),
             last_client_timestamp: client_timestamp.to_string(),
             last_op: op_db.clone(),
@@ -1248,7 +1248,7 @@ fn upsert_entity_metadata_preserving_seq_tx(
         })
         .on_conflict((
             sync_entity_metadata::entity,
-            sync_entity_metadata::entity_id,
+            sync_entity_metadata::subject_id,
         ))
         .do_update()
         .set((
@@ -1268,7 +1268,7 @@ pub(in crate::sync::app_sync) fn insert_outbox_event(
     let OutboxWriteRequest {
         event_id,
         entity,
-        entity_id,
+        subject_id,
         op,
         client_timestamp,
         payload,
@@ -1284,7 +1284,7 @@ pub(in crate::sync::app_sync) fn insert_outbox_event(
     let row = SyncOutboxEventDB {
         event_id: event_id.clone(),
         entity: enum_to_db(&entity)?,
-        entity_id: entity_id.clone(),
+        subject_id: subject_id.clone(),
         op: enum_to_db(&op)?,
         client_timestamp: client_timestamp.clone(),
         payload,
@@ -1307,7 +1307,7 @@ pub(in crate::sync::app_sync) fn insert_outbox_event(
     upsert_entity_metadata_preserving_seq_tx(
         conn,
         entity,
-        &entity_id,
+        &subject_id,
         &event_id,
         &client_timestamp,
         op,
@@ -1320,7 +1320,7 @@ fn to_outbox_event(row: SyncOutboxEventDB) -> Result<SyncOutboxEvent> {
     Ok(SyncOutboxEvent {
         event_id: row.event_id,
         entity: enum_from_db(&row.entity)?,
-        entity_id: row.entity_id,
+        subject_id: row.subject_id,
         op: enum_from_db(&row.op)?,
         client_timestamp: row.client_timestamp,
         payload: row.payload,
@@ -1338,7 +1338,7 @@ fn to_outbox_event(row: SyncOutboxEventDB) -> Result<SyncOutboxEvent> {
 fn to_entity_metadata(row: SyncEntityMetadataDB) -> Result<SyncEntityMetadata> {
     Ok(SyncEntityMetadata {
         entity: enum_from_db(&row.entity)?,
-        entity_id: row.entity_id,
+        subject_id: row.subject_id,
         last_event_id: row.last_event_id,
         last_client_timestamp: row.last_client_timestamp,
         last_op: enum_from_db(&row.last_op)?,
@@ -1396,10 +1396,10 @@ fn upsert_json_row(
 fn load_entity_metadata_tx(
     conn: &mut SqliteConnection,
     entity_db: &str,
-    entity_id: &str,
+    subject_id: &str,
 ) -> Result<Option<SyncEntityMetadataDB>> {
     let row = sync_entity_metadata::table
-        .find((entity_db.to_string(), entity_id.to_string()))
+        .find((entity_db.to_string(), subject_id.to_string()))
         .first::<SyncEntityMetadataDB>(conn)
         .optional()
         .map_err(StorageError::from)?;
@@ -1607,7 +1607,7 @@ fn tombstone_remote_preset_rule_delete(
 
 fn apply_spending_preset_rule_deletion_event(
     conn: &mut SqliteConnection,
-    entity_id: &str,
+    subject_id: &str,
     op: SyncOperation,
     payload_json: &serde_json::Value,
     client_timestamp: &str,
@@ -1618,11 +1618,11 @@ fn apply_spending_preset_rule_deletion_event(
                 .to_string(),
         )));
     };
-    let expected_entity_id = preset_rule_deletion_id(&preset_id, &rule_key);
-    if expected_entity_id != entity_id {
+    let expected_subject_id = preset_rule_deletion_id(&preset_id, &rule_key);
+    if expected_subject_id != subject_id {
         return Err(Error::Database(DatabaseError::Internal(format!(
-            "spending_preset_rule_deletion entity_id '{}' does not match payload key '{}'",
-            entity_id, expected_entity_id
+            "spending_preset_rule_deletion subject_id '{}' does not match payload key '{}'",
+            subject_id, expected_subject_id
         ))));
     }
 
@@ -1730,10 +1730,10 @@ fn apply_custom_taxonomy_event(
                 )));
             }
 
-            // Validate payload taxonomy ID matches event entity_id
+            // Validate payload taxonomy ID matches event subject_id
             if bundle.taxonomy.id != taxonomy_id {
                 return Err(Error::Database(DatabaseError::Internal(format!(
-                    "custom_taxonomy payload id '{}' does not match entity_id '{}'",
+                    "custom_taxonomy payload id '{}' does not match subject_id '{}'",
                     bundle.taxonomy.id, taxonomy_id
                 ))));
             }
@@ -1855,7 +1855,7 @@ fn mark_table_incremental_applied_tx(conn: &mut SqliteConnection, table_name: &s
 fn apply_remote_event_lww_tx(
     conn: &mut SqliteConnection,
     entity: SyncEntity,
-    entity_id_value: String,
+    subject_id_value: String,
     op: SyncOperation,
     event_id_value: String,
     client_timestamp_value: String,
@@ -1873,7 +1873,7 @@ fn apply_remote_event_lww_tx(
     }
 
     let entity_db = enum_to_db(&entity)?;
-    let metadata_row = load_entity_metadata_tx(conn, &entity_db, &entity_id_value)?;
+    let metadata_row = load_entity_metadata_tx(conn, &entity_db, &subject_id_value)?;
 
     let mut should_apply = match metadata_row.as_ref() {
         Some(meta) => should_apply_against_metadata(
@@ -1892,7 +1892,7 @@ fn apply_remote_event_lww_tx(
         if entity == SyncEntity::CustomTaxonomy {
             apply_custom_taxonomy_event(
                 conn,
-                &entity_id_value,
+                &subject_id_value,
                 op,
                 &payload_json,
                 &event_id_value,
@@ -1904,7 +1904,7 @@ fn apply_remote_event_lww_tx(
                 SyncOperation::Create | SyncOperation::Update => {
                     match apply_broker_activity_user_patch_tx(
                         conn,
-                        &entity_id_value,
+                        &subject_id_value,
                         &event_id_value,
                         &payload_json,
                         &client_timestamp_value,
@@ -1925,17 +1925,17 @@ fn apply_remote_event_lww_tx(
                 }
             }
         } else if entity == SyncEntity::SpendingSetting
-            && !is_syncable_spending_setting_key(&entity_id_value)
+            && !is_syncable_spending_setting_key(&subject_id_value)
         {
             log::warn!(
                 "Skipping unsupported synced spending setting '{}'",
-                entity_id_value
+                subject_id_value
             );
             applied_entity_change = false;
         } else if entity == SyncEntity::SpendingPresetRuleDeletion {
             apply_spending_preset_rule_deletion_event(
                 conn,
-                &entity_id_value,
+                &subject_id_value,
                 op,
                 &payload_json,
                 &client_timestamp_value,
@@ -1947,7 +1947,7 @@ fn apply_remote_event_lww_tx(
                     if entity == SyncEntity::SpendingCategorizationRule {
                         tombstone_remote_preset_rule_delete(
                             conn,
-                            &entity_id_value,
+                            &subject_id_value,
                             &payload_json,
                             &client_timestamp_value,
                         )?;
@@ -1956,7 +1956,7 @@ fn apply_remote_event_lww_tx(
                         "DELETE FROM {} WHERE {} = '{}'",
                         quote_identifier(table_name),
                         quote_identifier(pk_name),
-                        escape_sqlite_str(&entity_id_value)
+                        escape_sqlite_str(&subject_id_value)
                     );
                     diesel::sql_query(sql)
                         .execute(conn)
@@ -1975,16 +1975,16 @@ fn apply_remote_event_lww_tx(
                         .collect();
                     let mut fields = normalize_payload_fields(conn, table_name, fields)?;
                     if let Some((_, payload_pk)) = fields.iter().find(|(k, _)| k == pk_name) {
-                        if !payload_value_matches_entity_id(payload_pk, &entity_id_value) {
+                        if !payload_value_matches_subject_id(payload_pk, &subject_id_value) {
                             return Err(Error::Database(DatabaseError::Internal(format!(
-                                "Sync payload PK '{}' does not match entity_id '{}'",
-                                pk_name, entity_id_value
+                                "Sync payload PK '{}' does not match subject_id '{}'",
+                                pk_name, subject_id_value
                             ))));
                         }
                     } else {
                         fields.push((
                             pk_name.to_string(),
-                            serde_json::Value::String(entity_id_value.clone()),
+                            serde_json::Value::String(subject_id_value.clone()),
                         ));
                     }
                     validate_spending_decimal_field(&entity, &fields)?;
@@ -2021,7 +2021,7 @@ fn apply_remote_event_lww_tx(
                     }
 
                     if applied_entity_change && matches!(entity, SyncEntity::Snapshot) {
-                        rebuild_snapshot_positions_from_snapshot_row_tx(conn, &entity_id_value)?;
+                        rebuild_snapshot_positions_from_snapshot_row_tx(conn, &subject_id_value)?;
                         mark_table_incremental_applied_tx(conn, "snapshot_positions")?;
                     }
                 }
@@ -2034,7 +2034,7 @@ fn apply_remote_event_lww_tx(
             upsert_entity_metadata_tx(
                 conn,
                 entity,
-                &entity_id_value,
+                &subject_id_value,
                 &event_id_value,
                 &client_timestamp_value,
                 op,
@@ -2051,7 +2051,7 @@ fn apply_remote_event_lww_tx(
                 event_id: event_id_value,
                 seq: seq_value,
                 entity: entity_db,
-                entity_id: entity_id_value,
+                subject_id: subject_id_value,
                 applied_at: Utc::now().to_rfc3339(),
             })
             .on_conflict(sync_applied_events::event_id)
@@ -2526,7 +2526,7 @@ impl AppSyncRepository {
             .exec(move |conn| {
                 let row = SyncEntityMetadataDB {
                     entity: enum_to_db(&metadata.entity)?,
-                    entity_id: metadata.entity_id.clone(),
+                    subject_id: metadata.subject_id.clone(),
                     last_event_id: metadata.last_event_id.clone(),
                     last_client_timestamp: metadata.last_client_timestamp.clone(),
                     last_op: enum_to_db(&metadata.last_op)?,
@@ -2537,7 +2537,7 @@ impl AppSyncRepository {
                     .values(&row)
                     .on_conflict((
                         sync_entity_metadata::entity,
-                        sync_entity_metadata::entity_id,
+                        sync_entity_metadata::subject_id,
                     ))
                     .do_update()
                     .set((
@@ -2557,12 +2557,12 @@ impl AppSyncRepository {
     pub fn get_entity_metadata(
         &self,
         entity: SyncEntity,
-        entity_id_value: &str,
+        subject_id_value: &str,
     ) -> Result<Option<SyncEntityMetadata>> {
         let mut conn = get_connection(&self.pool)?;
         let entity_value = enum_to_db(&entity)?;
         let row = sync_entity_metadata::table
-            .find((entity_value, entity_id_value))
+            .find((entity_value, subject_id_value))
             .first::<SyncEntityMetadataDB>(&mut conn)
             .optional()
             .map_err(StorageError::from)?;
@@ -2574,7 +2574,7 @@ impl AppSyncRepository {
     pub async fn apply_remote_event_lww(
         &self,
         entity: SyncEntity,
-        entity_id_value: String,
+        subject_id_value: String,
         op: SyncOperation,
         event_id_value: String,
         client_timestamp_value: String,
@@ -2586,7 +2586,7 @@ impl AppSyncRepository {
                 apply_remote_event_lww_tx(
                     conn,
                     entity,
-                    entity_id_value.clone(),
+                    subject_id_value.clone(),
                     op,
                     event_id_value.clone(),
                     client_timestamp_value,
@@ -2596,7 +2596,7 @@ impl AppSyncRepository {
                 .map_err(|err| {
                     replay_apply_error(
                         entity,
-                        &entity_id_value,
+                        &subject_id_value,
                         op,
                         &event_id_value,
                         seq_value,
@@ -2646,12 +2646,12 @@ impl AppSyncRepository {
                     }
 
                     let mut applied = 0usize;
-                    for (entity, entity_id, op, event_id, client_timestamp, seq, payload) in events
+                    for (entity, subject_id, op, event_id, client_timestamp, seq, payload) in events
                     {
                         if apply_remote_event_lww_tx(
                             conn,
                             entity,
-                            entity_id.clone(),
+                            subject_id.clone(),
                             op,
                             event_id.clone(),
                             client_timestamp.clone(),
@@ -2659,7 +2659,7 @@ impl AppSyncRepository {
                             payload,
                         )
                         .map_err(|err| {
-                            replay_apply_error(entity, &entity_id, op, &event_id, seq, err)
+                            replay_apply_error(entity, &subject_id, op, &event_id, seq, err)
                         })? {
                             applied += 1;
                         }
@@ -2826,7 +2826,7 @@ impl AppSyncRepository {
         event_id_value: String,
         seq_value: i64,
         entity_value: SyncEntity,
-        entity_id_value: String,
+        subject_id_value: String,
     ) -> Result<()> {
         self.writer
             .exec(move |conn| {
@@ -2834,7 +2834,7 @@ impl AppSyncRepository {
                     event_id: event_id_value.clone(),
                     seq: seq_value,
                     entity: enum_to_db(&entity_value)?,
-                    entity_id: entity_id_value,
+                    subject_id: subject_id_value,
                     applied_at: Utc::now().to_rfc3339(),
                 };
 
@@ -3326,7 +3326,7 @@ mod tests {
         taxonomy_categories,
     };
     use crate::sync::broker_activity_patch::{
-        broker_activity_identity, broker_activity_user_patch_entity_id,
+        broker_activity_identity, broker_activity_user_patch_subject_id,
         clear_pending_broker_activity_user_patches,
     };
     use wealthfolio_core::accounts::account_types;
@@ -3398,16 +3398,16 @@ mod tests {
             "
             CREATE TABLE sync_entity_metadata (
                 entity TEXT NOT NULL,
-                entity_id TEXT NOT NULL,
+                subject_id TEXT NOT NULL,
                 last_event_id TEXT NOT NULL,
                 last_client_timestamp TEXT NOT NULL,
                 last_seq BIGINT NOT NULL DEFAULT 0,
-                PRIMARY KEY (entity, entity_id)
+                PRIMARY KEY (entity, subject_id)
             );
             CREATE TABLE sync_outbox (
                 event_id TEXT PRIMARY KEY NOT NULL,
                 entity TEXT NOT NULL,
-                entity_id TEXT NOT NULL,
+                subject_id TEXT NOT NULL,
                 op TEXT NOT NULL,
                 client_timestamp TEXT NOT NULL
             );
@@ -3435,14 +3435,14 @@ mod tests {
             INSERT INTO assets (id) VALUES ('existing-asset');
 
             INSERT INTO sync_entity_metadata
-                (entity, entity_id, last_event_id, last_client_timestamp, last_seq)
+                (entity, subject_id, last_event_id, last_client_timestamp, last_seq)
             VALUES
                 ('goal', 'deleted-goal', 'evt-remote-delete', '2026-02-12T00:00:10Z', 44),
                 ('account', 'existing-account', 'evt-remote-update', '2026-02-12T00:00:10Z', 55),
                 ('asset', 'existing-asset', 'evt-remote-old', '2026-02-12T00:00:10Z', 77);
 
             INSERT INTO sync_outbox
-                (event_id, entity, entity_id, op, client_timestamp)
+                (event_id, entity, subject_id, op, client_timestamp)
             VALUES
                 ('evt-local-newer', 'asset', 'existing-asset', 'update', '2026-02-12T00:00:11Z');
             ",
@@ -3456,7 +3456,7 @@ mod tests {
 
         let deleted_goal = sync_entity_metadata::table
             .filter(sync_entity_metadata::entity.eq("goal"))
-            .filter(sync_entity_metadata::entity_id.eq("deleted-goal"))
+            .filter(sync_entity_metadata::subject_id.eq("deleted-goal"))
             .first::<SyncEntityMetadataDB>(&mut conn)
             .expect("deleted goal metadata");
         assert_eq!(deleted_goal.last_op, "delete");
@@ -3464,7 +3464,7 @@ mod tests {
 
         let existing_account = sync_entity_metadata::table
             .filter(sync_entity_metadata::entity.eq("account"))
-            .filter(sync_entity_metadata::entity_id.eq("existing-account"))
+            .filter(sync_entity_metadata::subject_id.eq("existing-account"))
             .first::<SyncEntityMetadataDB>(&mut conn)
             .expect("existing account metadata");
         assert_eq!(existing_account.last_op, "update");
@@ -3472,7 +3472,7 @@ mod tests {
 
         let existing_asset = sync_entity_metadata::table
             .filter(sync_entity_metadata::entity.eq("asset"))
-            .filter(sync_entity_metadata::entity_id.eq("existing-asset"))
+            .filter(sync_entity_metadata::subject_id.eq("existing-asset"))
             .first::<SyncEntityMetadataDB>(&mut conn)
             .expect("existing asset metadata");
         assert_eq!(existing_asset.last_event_id, "evt-local-newer");
@@ -3559,12 +3559,12 @@ mod tests {
             Some("broker-record-1"),
         )
         .expect("broker identity");
-        let entity_id = broker_activity_user_patch_entity_id(&identity);
+        let subject_id = broker_activity_user_patch_subject_id(&identity);
 
         let applied = apply_remote_event_lww_tx(
             &mut conn,
             SyncEntity::BrokerActivityUserPatch,
-            entity_id,
+            subject_id,
             SyncOperation::Update,
             "broker-patch-event-1".to_string(),
             "2026-02-01T00:00:00Z".to_string(),
@@ -3648,13 +3648,13 @@ mod tests {
             Some("broker-record-missing-first"),
         )
         .expect("broker identity");
-        let entity_id = broker_activity_user_patch_entity_id(&identity);
+        let subject_id = broker_activity_user_patch_subject_id(&identity);
         let entity_db = enum_to_db(&SyncEntity::BrokerActivityUserPatch).expect("entity db");
 
         let applied = apply_remote_event_lww_tx(
             &mut conn,
             SyncEntity::BrokerActivityUserPatch,
-            entity_id.clone(),
+            subject_id.clone(),
             SyncOperation::Update,
             "broker-patch-event-missing-first".to_string(),
             "2026-02-01T00:00:00Z".to_string(),
@@ -3676,7 +3676,7 @@ mod tests {
         assert!(!applied);
         let metadata_count: i64 = sync_entity_metadata::table
             .filter(sync_entity_metadata::entity.eq(&entity_db))
-            .filter(sync_entity_metadata::entity_id.eq(&entity_id))
+            .filter(sync_entity_metadata::subject_id.eq(&subject_id))
             .count()
             .get_result(&mut conn)
             .expect("metadata count");
@@ -3753,7 +3753,7 @@ mod tests {
 
         let metadata_count: i64 = sync_entity_metadata::table
             .filter(sync_entity_metadata::entity.eq(&entity_db))
-            .filter(sync_entity_metadata::entity_id.eq(&entity_id))
+            .filter(sync_entity_metadata::subject_id.eq(&subject_id))
             .count()
             .get_result(&mut conn)
             .expect("metadata count after replay");
@@ -4788,7 +4788,7 @@ mod tests {
             .expect("count outbox");
         let metadata_count: i64 = sync_entity_metadata::table
             .filter(sync_entity_metadata::entity.eq(enum_to_db(&SyncEntity::Goal).expect("entity")))
-            .filter(sync_entity_metadata::entity_id.eq("goal-summary-cache"))
+            .filter(sync_entity_metadata::subject_id.eq("goal-summary-cache"))
             .select(count_star())
             .first(&mut conn)
             .expect("count metadata");
@@ -5726,7 +5726,7 @@ mod tests {
         }
         repo.upsert_entity_metadata(SyncEntityMetadata {
             entity: SyncEntity::Account,
-            entity_id: "acc-local-dirty".to_string(),
+            subject_id: "acc-local-dirty".to_string(),
             last_event_id: "evt-local".to_string(),
             last_client_timestamp: chrono::Utc::now().to_rfc3339(),
             last_op: SyncOperation::Update,
@@ -5794,7 +5794,7 @@ mod tests {
 
         repo.upsert_entity_metadata(SyncEntityMetadata {
             entity: SyncEntity::Account,
-            entity_id: "acc-dirty".to_string(),
+            subject_id: "acc-dirty".to_string(),
             last_event_id: "evt-dirty".to_string(),
             last_client_timestamp: chrono::Utc::now().to_rfc3339(),
             last_op: SyncOperation::Update,
@@ -5924,7 +5924,7 @@ mod tests {
 
         repo.upsert_entity_metadata(SyncEntityMetadata {
             entity: SyncEntity::Account,
-            entity_id: "acc-seq-preserve".to_string(),
+            subject_id: "acc-seq-preserve".to_string(),
             last_event_id: "evt-remote".to_string(),
             last_client_timestamp: "2026-02-12T00:00:00Z".to_string(),
             last_op: SyncOperation::Update,
@@ -6157,7 +6157,7 @@ mod tests {
             SyncEntity::Snapshot,
             SyncEntity::AllocationTarget,
             SyncEntity::AllocationTargetWeight,
-            SyncEntity::RebalanceSellConstraint,
+            SyncEntity::AllocationTargetConstraint,
         ];
 
         for entity in entities {
@@ -6562,7 +6562,7 @@ mod tests {
             .execute(&mut conn)
             .expect("insert template");
 
-        // Current format: entity_id is the UUID `id` column; payload includes `id`.
+        // Current format: subject_id is the UUID `id` column; payload includes `id`.
         let applied = repo
             .apply_remote_event_lww(
                 SyncEntity::ActivityImportProfile,
@@ -6592,14 +6592,14 @@ mod tests {
             .expect("import account template row");
         assert_eq!(template_id_value, "tmpl-import-profile");
 
-        // Legacy format (pre-id-column): entity_id was the account_id UUID, no `id` in payload.
-        // The generic replay injects `id = entity_id`, so this maps cleanly for migrated rows
+        // Legacy format (pre-id-column): subject_id was the account_id UUID, no `id` in payload.
+        // The generic replay injects `id = subject_id`, so this maps cleanly for migrated rows
         // (migration sets id = account_id for all pre-existing rows).
         insert_account_for_test(&mut conn, "acc-import-legacy").expect("insert account");
         let applied_legacy = repo
             .apply_remote_event_lww(
                 SyncEntity::ActivityImportProfile,
-                "acc-import-legacy".to_string(), // old format: entity_id = account_id
+                "acc-import-legacy".to_string(), // old format: subject_id = account_id
                 SyncOperation::Create,
                 "evt-import-profile-legacy".to_string(),
                 "2026-02-19T00:00:00Z".to_string(),
@@ -6625,7 +6625,7 @@ mod tests {
             .select(import_account_templates::id)
             .first(&mut conn)
             .expect("legacy import account template row");
-        // id was injected from entity_id (= account_id), matching migration behaviour
+        // id was injected from subject_id (= account_id), matching migration behaviour
         assert_eq!(legacy_id, "acc-import-legacy");
     }
 
@@ -7653,12 +7653,12 @@ mod tests {
     async fn replay_spending_preset_rule_deletion_applies_and_deletes() {
         let (pool, writer) = setup_db();
         let repo = AppSyncRepository::new(pool.clone(), writer);
-        let entity_id = preset_rule_deletion_id("ca", "groceries");
+        let subject_id = preset_rule_deletion_id("ca", "groceries");
 
         let applied = repo
             .apply_remote_event_lww(
                 SyncEntity::SpendingPresetRuleDeletion,
-                entity_id.clone(),
+                subject_id.clone(),
                 SyncOperation::Update,
                 "evt-preset-rule-deletion-upsert".to_string(),
                 "2026-02-15T00:00:00Z".to_string(),
@@ -7687,7 +7687,7 @@ mod tests {
         let applied = repo
             .apply_remote_event_lww(
                 SyncEntity::SpendingPresetRuleDeletion,
-                entity_id,
+                subject_id,
                 SyncOperation::Delete,
                 "evt-preset-rule-deletion-delete".to_string(),
                 "2026-02-15T00:00:01Z".to_string(),
@@ -7715,12 +7715,12 @@ mod tests {
     async fn replay_spending_preset_rule_deletion_recreates_after_delete() {
         let (pool, writer) = setup_db();
         let repo = AppSyncRepository::new(pool.clone(), writer);
-        let entity_id = preset_rule_deletion_id("ca", "groceries");
+        let subject_id = preset_rule_deletion_id("ca", "groceries");
 
         let applied = repo
             .apply_remote_event_lww(
                 SyncEntity::SpendingPresetRuleDeletion,
-                entity_id.clone(),
+                subject_id.clone(),
                 SyncOperation::Update,
                 "evt-preset-rule-deletion-upsert".to_string(),
                 "2026-02-15T00:00:00Z".to_string(),
@@ -7739,7 +7739,7 @@ mod tests {
         let applied = repo
             .apply_remote_event_lww(
                 SyncEntity::SpendingPresetRuleDeletion,
-                entity_id.clone(),
+                subject_id.clone(),
                 SyncOperation::Delete,
                 "evt-preset-rule-deletion-delete".to_string(),
                 "2026-02-15T00:00:01Z".to_string(),
@@ -7756,7 +7756,7 @@ mod tests {
         let applied = repo
             .apply_remote_event_lww(
                 SyncEntity::SpendingPresetRuleDeletion,
-                entity_id,
+                subject_id,
                 SyncOperation::Update,
                 "evt-preset-rule-deletion-recreate".to_string(),
                 "2026-02-15T00:00:02Z".to_string(),
@@ -7783,7 +7783,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn replay_spending_preset_rule_deletion_rejects_mismatched_entity_id() {
+    async fn replay_spending_preset_rule_deletion_rejects_mismatched_subject_id() {
         let (pool, writer) = setup_db();
         let repo = AppSyncRepository::new(pool.clone(), writer);
 

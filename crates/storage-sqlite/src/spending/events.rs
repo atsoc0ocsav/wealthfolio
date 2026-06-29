@@ -48,7 +48,7 @@ pub struct NewEventTypeDB {
 
 impl crate::sync::SyncOutboxModel for EventTypeDB {
     const ENTITY: SyncEntity = SyncEntity::SpendingEventType;
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 
@@ -209,7 +209,7 @@ pub struct NewEventDB {
 
 impl crate::sync::SyncOutboxModel for EventDB {
     const ENTITY: SyncEntity = SyncEntity::SpendingEvent;
-    fn sync_entity_id(&self) -> &str {
+    fn sync_subject_id(&self) -> &str {
         &self.id
     }
 }

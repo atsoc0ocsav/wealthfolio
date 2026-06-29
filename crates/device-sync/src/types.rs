@@ -509,7 +509,7 @@ pub struct SyncPushEventRequest {
     #[serde(rename = "type")]
     pub event_type: String,
     pub entity: SyncEntity,
-    pub entity_id: String,
+    pub subject_id: String,
     pub client_timestamp: String,
     pub payload: String,
     pub payload_key_version: i32,
@@ -549,7 +549,7 @@ pub struct SyncEvent {
     pub event_type: String,
     pub entity: String,
     #[serde(alias = "entityId")]
-    pub entity_id: String,
+    pub subject_id: String,
     #[serde(alias = "clientTimestamp")]
     pub client_timestamp: String,
     pub payload: String,
@@ -591,7 +591,7 @@ pub fn sync_entity_from_remote(entity: &str) -> Option<SyncEntity> {
         "portfolio_account" => Some(SyncEntity::PortfolioAccount),
         "allocation_target" => Some(SyncEntity::AllocationTarget),
         "allocation_target_weight" => Some(SyncEntity::AllocationTargetWeight),
-        "rebalance_sell_constraint" => Some(SyncEntity::RebalanceSellConstraint),
+        "rebalance_target_constraint" => Some(SyncEntity::AllocationTargetConstraint),
         "spending_setting" => Some(SyncEntity::SpendingSetting),
         "activity_taxonomy_assignment" => Some(SyncEntity::ActivityTaxonomyAssignment),
         "spending_activity_split" => Some(SyncEntity::SpendingActivitySplit),
