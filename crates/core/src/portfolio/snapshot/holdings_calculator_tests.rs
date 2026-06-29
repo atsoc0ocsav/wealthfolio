@@ -11,8 +11,11 @@ mod tests {
     };
     use crate::errors::Result;
     use crate::fx::{ExchangeRate, FxError, FxServiceTrait, NewExchangeRate};
-    use crate::portfolio::snapshot::holdings_calculator::HoldingsCalculator;
-    use crate::portfolio::snapshot::{AccountStateSnapshot, Lot, Position, SnapshotSource};
+    use crate::lots::{LotClosure, LotDisposal, LotRecord};
+    use crate::portfolio::snapshot::holdings_calculator::{HoldingsCalculator, ProjectionRun};
+    use crate::portfolio::snapshot::{
+        AccountStateSnapshot, HoldingsCalculationResult, Lot, Position, SnapshotSource,
+    };
     use async_trait;
     use chrono::{DateTime, NaiveDate, TimeZone, Utc};
     use rust_decimal::Decimal;
@@ -521,27 +524,112 @@ mod tests {
         fx_service.add_bidirectional_rate("USD", "CAD", date, rate);
     }
 
+    /// Test harness owning a single [`ProjectionRun`] and forwarding to the
+    /// calculator's run-threaded API. One harness == one recalculation run, so
+    /// the transfer-lot cache and disposals persist across successive
+    /// `calculate_next_holdings` calls (matching the previous shared-cache
+    /// behavior). Methods mirror the calculator's pre-ProjectionRun signatures.
+    struct CalcHarness {
+        calculator: HoldingsCalculator,
+        run: ProjectionRun,
+    }
+
+    impl CalcHarness {
+        fn new(calculator: HoldingsCalculator) -> Self {
+            Self {
+                calculator,
+                run: ProjectionRun::new(),
+            }
+        }
+
+        fn calculate_next_holdings(
+            &mut self,
+            previous_snapshot: &AccountStateSnapshot,
+            activities_today: &[Activity],
+            target_date: NaiveDate,
+        ) -> Result<HoldingsCalculationResult> {
+            self.calculator.calculate_next_holdings(
+                &mut self.run,
+                previous_snapshot,
+                activities_today,
+                target_date,
+            )
+        }
+
+        fn calculate_next_holdings_for_account_type(
+            &mut self,
+            previous_snapshot: &AccountStateSnapshot,
+            activities_today: &[Activity],
+            target_date: NaiveDate,
+            account_type: Option<&str>,
+        ) -> Result<HoldingsCalculationResult> {
+            self.calculator.calculate_next_holdings_for_account_type(
+                &mut self.run,
+                previous_snapshot,
+                activities_today,
+                target_date,
+                account_type,
+            )
+        }
+
+        fn take_lot_disposals(
+            &mut self,
+            account_id: &str,
+            cost_basis_method: &str,
+        ) -> Vec<LotDisposal> {
+            self.run.take_lot_disposals(account_id, cost_basis_method)
+        }
+
+        #[allow(dead_code)]
+        fn take_disposed_lots(
+            &mut self,
+            account_id: &str,
+            cost_basis_method: &str,
+        ) -> Vec<LotClosure> {
+            self.run.take_disposed_lots(account_id, cost_basis_method)
+        }
+
+        fn extract_lot_records_with_base(
+            &self,
+            snapshot: &AccountStateSnapshot,
+            cost_basis_method: &str,
+        ) -> Vec<LotRecord> {
+            self.calculator
+                .extract_lot_records_with_base(snapshot, cost_basis_method)
+        }
+
+        #[allow(dead_code)]
+        fn set_cost_basis_method_for_account(&mut self, account_id: &str, cost_basis_method: &str) {
+            self.run
+                .set_cost_basis_method(account_id, cost_basis_method);
+        }
+    }
+
     // --- Helper to create calculator with mock dependencies ---
     fn create_calculator(
         fx_service: Arc<dyn FxServiceTrait>,
         base_currency: Arc<RwLock<String>>,
-    ) -> HoldingsCalculator {
+    ) -> CalcHarness {
         let asset_repository = Arc::new(MockAssetRepository::new());
-        HoldingsCalculator::new(fx_service, base_currency, asset_repository)
+        CalcHarness::new(HoldingsCalculator::new(
+            fx_service,
+            base_currency,
+            asset_repository,
+        ))
     }
 
     fn create_calculator_with_timezone(
         fx_service: Arc<dyn FxServiceTrait>,
         base_currency: Arc<RwLock<String>>,
         timezone: &str,
-    ) -> HoldingsCalculator {
+    ) -> CalcHarness {
         let asset_repository = Arc::new(MockAssetRepository::new());
-        HoldingsCalculator::new_with_timezone(
+        CalcHarness::new(HoldingsCalculator::new_with_timezone(
             fx_service,
             base_currency,
             Arc::new(RwLock::new(timezone.to_string())),
             asset_repository,
-        )
+        ))
     }
 
     // --- Tests ---
@@ -555,7 +643,7 @@ mod tests {
         let target_date = NaiveDate::from_str("2023-01-01").unwrap();
         mock_fx_service.add_bidirectional_rate("CAD", "USD", target_date, dec!(0.75)); // 1 CAD = 0.75 USD
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let activity_currency = "CAD";
         let target_date_str = "2023-01-01";
@@ -609,7 +697,7 @@ mod tests {
         let mock_fx_service = MockFxService::new();
         let account_currency = "USD";
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let target_date_str = "2023-01-01";
         let target_date = NaiveDate::from_str(target_date_str).unwrap();
@@ -652,7 +740,7 @@ mod tests {
         let mock_fx_service = MockFxService::new();
         let account_currency = "USD";
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let target_date_str = "2026-05-05";
         let target_date = NaiveDate::from_str(target_date_str).unwrap();
@@ -693,7 +781,7 @@ mod tests {
 
     #[test]
     fn test_activity_buckets_to_user_local_day_boundary() {
-        let calculator = create_calculator_with_timezone(
+        let mut calculator = create_calculator_with_timezone(
             Arc::new(MockFxService::new()),
             Arc::new(RwLock::new("USD".to_string())),
             "America/Los_Angeles",
@@ -729,7 +817,7 @@ mod tests {
 
     #[test]
     fn test_activity_not_processed_when_target_date_is_wrong_for_user_timezone() {
-        let calculator = create_calculator_with_timezone(
+        let mut calculator = create_calculator_with_timezone(
             Arc::new(MockFxService::new()),
             Arc::new(RwLock::new("USD".to_string())),
             "America/Los_Angeles",
@@ -763,7 +851,7 @@ mod tests {
 
     #[test]
     fn test_split_uses_user_local_calendar_date_for_lot_eligibility() {
-        let calculator = create_calculator_with_timezone(
+        let mut calculator = create_calculator_with_timezone(
             Arc::new(MockFxService::new()),
             Arc::new(RwLock::new("USD".to_string())),
             "America/Los_Angeles",
@@ -816,7 +904,7 @@ mod tests {
         let mock_fx_service = Arc::new(MockFxService::new());
         let account_currency = "CAD";
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(mock_fx_service.clone(), base_currency);
+        let mut calculator = create_calculator(mock_fx_service.clone(), base_currency);
 
         let activity_currency = "CAD";
         let target_date_str = "2023-01-02";
@@ -934,7 +1022,7 @@ mod tests {
         let rate_usd_cad = usd_cad_rate(target_date_str); // 1.25
 
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let previous_snapshot =
             create_initial_snapshot("acc_fx_buy", account_currency, "2023-01-02");
@@ -1005,7 +1093,7 @@ mod tests {
         add_usd_cad_rates(&mut mock_fx_service, later_date_str);
 
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
         let previous_snapshot =
             create_initial_snapshot("acc_fx_basis", account_currency, "2023-01-02");
 
@@ -1054,7 +1142,7 @@ mod tests {
         let rate_usd_cad = usd_cad_rate(target_date_str); // 1.25
 
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let mut previous_snapshot =
             create_initial_snapshot("acc_deposit_fx", account_currency, "2023-01-03");
@@ -1124,7 +1212,7 @@ mod tests {
         let account_currency = "CNY";
 
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(mock_fx_service, base_currency);
+        let mut calculator = create_calculator(mock_fx_service, base_currency);
 
         let mut previous_snapshot =
             create_initial_snapshot("acc_csv_import", account_currency, "2025-03-07");
@@ -1180,7 +1268,7 @@ mod tests {
         let rate_usd_cad = usd_cad_rate(target_date_str); // 1.25
 
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let mut previous_snapshot =
             create_initial_snapshot("acc_withdraw_fx", account_currency, "2023-01-04");
@@ -1250,7 +1338,7 @@ mod tests {
         let account_currency = "CNY";
 
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(mock_fx_service, base_currency);
+        let mut calculator = create_calculator(mock_fx_service, base_currency);
 
         let mut previous_snapshot =
             create_initial_snapshot("acc_deposit", account_currency, "2025-02-12");
@@ -1299,7 +1387,7 @@ mod tests {
         let account_currency = "CNY";
 
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(mock_fx_service, base_currency);
+        let mut calculator = create_calculator(mock_fx_service, base_currency);
 
         let mut previous_snapshot =
             create_initial_snapshot("acc_fee", account_currency, "2025-03-06");
@@ -1348,7 +1436,7 @@ mod tests {
         let account_currency = "CNY";
 
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(mock_fx_service, base_currency);
+        let mut calculator = create_calculator(mock_fx_service, base_currency);
 
         let mut previous_snapshot =
             create_initial_snapshot("acc_transfer_out", account_currency, "2025-03-09");
@@ -1403,7 +1491,7 @@ mod tests {
         let rate_usd_cad = usd_cad_rate(target_date_str); // 1.30
 
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let mut previous_snapshot =
             create_initial_snapshot("acc_income", account_currency, "2023-01-05");
@@ -1483,7 +1571,7 @@ mod tests {
         let account_currency = "USD";
 
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let mut previous_snapshot =
             create_initial_snapshot("card_1", account_currency, "2023-01-05");
@@ -1525,7 +1613,7 @@ mod tests {
         let mock_fx_service = Arc::new(MockFxService::new());
         let account_currency = "USD";
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(mock_fx_service, base_currency);
+        let mut calculator = create_calculator(mock_fx_service, base_currency);
 
         let target_date_str = "2023-01-07";
         let target_date = NaiveDate::from_str(target_date_str).unwrap();
@@ -1568,7 +1656,7 @@ mod tests {
         let mock_fx_service = Arc::new(MockFxService::new());
         let account_currency = "USD";
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(mock_fx_service, base_currency);
+        let mut calculator = create_calculator(mock_fx_service, base_currency);
 
         let target_date_str = "2025-03-10";
         let target_date = NaiveDate::from_str(target_date_str).unwrap();
@@ -1607,7 +1695,7 @@ mod tests {
         let mock_fx_service = Arc::new(MockFxService::new());
         let account_currency = "USD";
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(mock_fx_service, base_currency);
+        let mut calculator = create_calculator(mock_fx_service, base_currency);
 
         let previous_snapshot = create_initial_snapshot("acc_1", account_currency, "2025-03-08");
         let buy_date = NaiveDate::from_str("2025-03-09").unwrap();
@@ -1661,8 +1749,11 @@ mod tests {
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
         let mut repo = MockAssetRepository::new();
         repo.add_bond_asset("US912828ZT58", account_currency);
-        let calculator =
-            HoldingsCalculator::new(Arc::new(mock_fx_service), base_currency, Arc::new(repo));
+        let mut calculator = CalcHarness::new(HoldingsCalculator::new(
+            Arc::new(mock_fx_service),
+            base_currency,
+            Arc::new(repo),
+        ));
 
         let target_date_str = "2025-03-10";
         let target_date = NaiveDate::from_str(target_date_str).unwrap();
@@ -1700,7 +1791,7 @@ mod tests {
         let mock_fx_service = Arc::new(MockFxService::new());
         let account_currency = "USD";
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(mock_fx_service, base_currency);
+        let mut calculator = create_calculator(mock_fx_service, base_currency);
 
         let target_date_str = "2025-03-10";
         let target_date = NaiveDate::from_str(target_date_str).unwrap();
@@ -1739,7 +1830,7 @@ mod tests {
         let mock_fx_service = Arc::new(MockFxService::new());
         let account_currency = "USD";
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(mock_fx_service, base_currency);
+        let mut calculator = create_calculator(mock_fx_service, base_currency);
 
         let target_date_str = "2025-03-10";
         let target_date = NaiveDate::from_str(target_date_str).unwrap();
@@ -1779,7 +1870,7 @@ mod tests {
         let mock_fx_service = Arc::new(MockFxService::new());
         let account_currency = "USD";
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(mock_fx_service, base_currency);
+        let mut calculator = create_calculator(mock_fx_service, base_currency);
 
         let target_date_str = "2025-03-10";
         let target_date = NaiveDate::from_str(target_date_str).unwrap();
@@ -1827,7 +1918,7 @@ mod tests {
         let rate_usd_cad = usd_cad_rate(target_date_str); // 1.30
 
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let mut previous_snapshot =
             create_initial_snapshot("acc_charge", account_currency, "2023-01-06");
@@ -1916,7 +2007,7 @@ mod tests {
         let rate_remove_date = usd_cad_rate(target_date_remove_str); // 1.30
 
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service.clone()), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service.clone()), base_currency);
 
         // --- Initial State ---
         let mut previous_snapshot_add =
@@ -2091,7 +2182,7 @@ mod tests {
         let rate_cash_date = usd_cad_rate(target_date_cash_transfer_str); // 1.30
 
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service.clone()), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service.clone()), base_currency);
 
         // --- Initial State ---
         let mut previous_snapshot_asset_tx =
@@ -2375,7 +2466,7 @@ mod tests {
 
         let account_currency = "CAD";
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let previous_snapshot =
             create_initial_snapshot("acc_transfer", account_currency, "2023-01-09");
@@ -2416,7 +2507,7 @@ mod tests {
         let rate_usd_cad = usd_cad_rate(target_date_str); // 1.30
 
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service.clone()), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service.clone()), base_currency);
 
         let mut previous_snapshot =
             create_initial_snapshot("acc_multi_act", account_currency, "2023-01-11");
@@ -2520,7 +2611,7 @@ mod tests {
         let activity_currency = "EUR"; // Activity in EUR, account in CAD
 
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let mut previous_snapshot =
             create_initial_snapshot("acc_fx_fail", account_currency, "2023-01-12");
@@ -2623,7 +2714,7 @@ mod tests {
         let rate_eur_cad = dec!(1.50);
 
         let base_currency = Arc::new(RwLock::new(account_currency.to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         // Initial Snapshot
         let mut previous_snapshot =
@@ -2795,7 +2886,7 @@ mod tests {
             rate_usd_eur_date2,
         );
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         // Initial state - empty account
         let mut snapshot_after_first =
@@ -3014,7 +3105,7 @@ mod tests {
             rate_usd_eur_date2,
         );
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         // Initial state - empty account
         let mut snapshot_after_first =
@@ -3164,7 +3255,7 @@ mod tests {
             rate_usd_eur,
         );
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         // Initial state
         let mut initial_snapshot = create_initial_snapshot(
@@ -3362,7 +3453,7 @@ mod tests {
 
         mock_fx_service.add_bidirectional_rate("USD", "CAD", target_date, service_rate);
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let previous_snapshot =
             create_initial_snapshot("acc_fx_rate_test", account_currency, "2023-01-31");
@@ -3431,7 +3522,7 @@ mod tests {
         let service_rate = dec!(1.30);
         mock_fx_service.add_bidirectional_rate("USD", "CAD", target_date, service_rate);
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let previous_snapshot =
             create_initial_snapshot("acc_fx_rate_none", account_currency, "2023-02-01");
@@ -3489,7 +3580,7 @@ mod tests {
         let service_rate = dec!(1.30);
         mock_fx_service.add_bidirectional_rate("USD", "CAD", target_date, service_rate);
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let previous_snapshot =
             create_initial_snapshot("acc_fx_rate_zero", account_currency, "2023-02-02");
@@ -3548,7 +3639,7 @@ mod tests {
 
         mock_fx_service.add_bidirectional_rate("USD", "CAD", target_date, service_rate);
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let mut previous_snapshot =
             create_initial_snapshot("acc_deposit_fx_rate", account_currency, "2023-02-03");
@@ -3625,7 +3716,7 @@ mod tests {
 
         mock_fx_service.add_bidirectional_rate("USD", "CAD", target_date, service_rate);
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         // Setup initial state with existing position
         let mut previous_snapshot =
@@ -3737,7 +3828,7 @@ mod tests {
         let target_date_str = "2023-02-06";
         let target_date = NaiveDate::from_str(target_date_str).unwrap();
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let previous_snapshot =
             create_initial_snapshot("acc_same_ccy", account_currency, "2023-02-05");
@@ -3789,7 +3880,7 @@ mod tests {
 
         mock_fx_service.add_bidirectional_rate("USD", "CAD", target_date, service_rate);
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let mut previous_snapshot =
             create_initial_snapshot("acc_withdraw_fx_rate", account_currency, "2023-02-06");
@@ -3858,7 +3949,7 @@ mod tests {
 
         mock_fx_service.add_bidirectional_rate("USD", "CAD", target_date, service_rate);
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let mut previous_snapshot =
             create_initial_snapshot("acc_dividend_fx_rate", account_currency, "2023-02-07");
@@ -3926,7 +4017,7 @@ mod tests {
 
         mock_fx_service.add_bidirectional_rate("USD", "CAD", target_date, service_rate);
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let mut previous_snapshot =
             create_initial_snapshot("acc_transfer_fx_rate", account_currency, "2023-02-08");
@@ -4015,7 +4106,7 @@ mod tests {
         // fx_rate: 1 CAD = 0.75 USD (user provides this)
         let activity_fx_rate = dec!(0.75);
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let previous_snapshot =
             create_initial_snapshot("acc_transfer_in_fx", account_currency, "2023-02-28");
@@ -4079,7 +4170,7 @@ mod tests {
 
         let activity_fx_rate = dec!(0.74); // 1 CAD = 0.74 USD
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let previous_snapshot =
             create_initial_snapshot("acc_buy_cad_usd", account_currency, "2023-03-01");
@@ -4145,7 +4236,7 @@ mod tests {
 
         let activity_fx_rate = dec!(0.73);
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency.clone());
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency.clone());
 
         // Create snapshot with existing AAPL position
         let mut previous_snapshot =
@@ -4243,7 +4334,7 @@ mod tests {
         let target_date_str = "2023-03-04";
         let target_date = NaiveDate::from_str(target_date_str).unwrap();
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let previous_snapshot =
             create_initial_snapshot("acc_no_fx", account_currency, "2023-03-03");
@@ -4288,7 +4379,7 @@ mod tests {
 
         let activity_fx_rate = dec!(0.72);
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         // Create snapshot with existing AAPL position
         let mut previous_snapshot =
@@ -4377,7 +4468,7 @@ mod tests {
         // fx_rate: 1 USD = 1.40 CAD
         let activity_fx_rate = dec!(1.40);
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let previous_snapshot = create_initial_snapshot(
             "acc_usd_activity_cad_account",
@@ -4513,7 +4604,7 @@ mod tests {
             transfer_out_service_rate,
         );
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
         let previous_snapshot =
             create_initial_snapshot("acc_transfer_out_book_fx", account_currency, "2023-03-09");
 
@@ -4592,7 +4683,7 @@ mod tests {
 
         let activity_fx_rate = dec!(1.35); // 1 USD = 1.35 CAD
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let previous_snapshot =
             create_initial_snapshot("acc_buy_usd_cad", account_currency, "2023-03-10");
@@ -4679,7 +4770,7 @@ mod tests {
         // FxService market rate differs from activity fx_rate — shouldn't matter
         mock_fx_service.add_bidirectional_rate("USD", "EUR", buy_date, dec!(0.92));
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         // Deposit 10,000 EUR
         let prev = create_initial_snapshot("acc_eur", account_currency, "2024-01-09");
@@ -4753,7 +4844,7 @@ mod tests {
 
         mock_fx_service.add_bidirectional_rate("USD", "EUR", sell_date, dec!(0.92));
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         // Start with existing position and EUR cash
         let mut prev = create_initial_snapshot("acc_eur_sell", account_currency, "2024-02-28");
@@ -4855,7 +4946,7 @@ mod tests {
         mock_fx_service.add_bidirectional_rate("USD", "EUR", buy_date, dec!(0.91));
         mock_fx_service.add_bidirectional_rate("USD", "EUR", sell_date, dec!(0.89));
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         // Step 1: Deposit 10,000 EUR
         let prev = create_initial_snapshot("acc_roundtrip", account_currency, "2024-05-31");
@@ -4933,7 +5024,7 @@ mod tests {
         let mut fx_service = MockFxService::new();
         fx_service.add_bidirectional_rate("USD", "CAD", buy_date, dec!(1.30));
         fx_service.add_bidirectional_rate("USD", "CAD", sell_date, dec!(1.40));
-        let calculator = create_calculator(
+        let mut calculator = create_calculator(
             Arc::new(fx_service),
             Arc::new(RwLock::new("CAD".to_string())),
         );
@@ -5022,7 +5113,7 @@ mod tests {
 
         let mut fx_service = MockFxService::new();
         fx_service.add_bidirectional_rate("USD", "CAD", buy_date, dec!(1.30));
-        let calculator = create_calculator(
+        let mut calculator = create_calculator(
             Arc::new(fx_service),
             Arc::new(RwLock::new("CAD".to_string())),
         );
@@ -5093,8 +5184,11 @@ mod tests {
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
         let mut repo = MockAssetRepository::new();
         repo.add_option_asset(option_symbol, "USD");
-        let calculator =
-            HoldingsCalculator::new(Arc::new(mock_fx_service), base_currency, Arc::new(repo));
+        let mut calculator = CalcHarness::new(HoldingsCalculator::new(
+            Arc::new(mock_fx_service),
+            base_currency,
+            Arc::new(repo),
+        ));
 
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2025-01-01");
         let buy = create_default_activity(
@@ -5157,8 +5251,11 @@ mod tests {
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
         let mut repo = MockAssetRepository::new();
         repo.add_option_asset(option_symbol, "USD");
-        let calculator =
-            HoldingsCalculator::new(Arc::new(mock_fx_service), base_currency, Arc::new(repo));
+        let mut calculator = CalcHarness::new(HoldingsCalculator::new(
+            Arc::new(mock_fx_service),
+            base_currency,
+            Arc::new(repo),
+        ));
 
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2026-06-25");
         let sell_to_open = create_default_activity(
@@ -5204,8 +5301,11 @@ mod tests {
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
         let mut repo = MockAssetRepository::new();
         repo.add_option_asset(option_symbol, "USD");
-        let calculator =
-            HoldingsCalculator::new(Arc::new(mock_fx_service), base_currency, Arc::new(repo));
+        let mut calculator = CalcHarness::new(HoldingsCalculator::new(
+            Arc::new(mock_fx_service),
+            base_currency,
+            Arc::new(repo),
+        ));
 
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2026-06-25");
         let sell_to_open = create_default_activity(
@@ -5280,8 +5380,11 @@ mod tests {
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
         let mut repo = MockAssetRepository::new();
         repo.add_option_asset(option_symbol, "USD");
-        let calculator =
-            HoldingsCalculator::new(Arc::new(mock_fx_service), base_currency, Arc::new(repo));
+        let mut calculator = CalcHarness::new(HoldingsCalculator::new(
+            Arc::new(mock_fx_service),
+            base_currency,
+            Arc::new(repo),
+        ));
 
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2026-06-25");
         let sell_to_open = create_default_activity(
@@ -5340,8 +5443,11 @@ mod tests {
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
         let mut repo = MockAssetRepository::new();
         repo.add_option_asset(option_symbol, "USD");
-        let calculator =
-            HoldingsCalculator::new(Arc::new(mock_fx_service), base_currency, Arc::new(repo));
+        let mut calculator = CalcHarness::new(HoldingsCalculator::new(
+            Arc::new(mock_fx_service),
+            base_currency,
+            Arc::new(repo),
+        ));
 
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2026-06-25");
         let buy_to_open = create_default_activity(
@@ -5401,8 +5507,11 @@ mod tests {
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
         let mut repo = MockAssetRepository::new();
         repo.add_option_asset(option_symbol, "USD");
-        let calculator =
-            HoldingsCalculator::new(Arc::new(mock_fx_service), base_currency, Arc::new(repo));
+        let mut calculator = CalcHarness::new(HoldingsCalculator::new(
+            Arc::new(mock_fx_service),
+            base_currency,
+            Arc::new(repo),
+        ));
 
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2025-11-30");
         let sell_to_open = create_default_activity(
@@ -5469,8 +5578,11 @@ mod tests {
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
         let mut repo = MockAssetRepository::new();
         repo.add_option_asset(option_symbol, "USD");
-        let calculator =
-            HoldingsCalculator::new(Arc::new(mock_fx_service), base_currency, Arc::new(repo));
+        let mut calculator = CalcHarness::new(HoldingsCalculator::new(
+            Arc::new(mock_fx_service),
+            base_currency,
+            Arc::new(repo),
+        ));
 
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2026-06-25");
         let mut buy_to_close = create_default_activity(
@@ -5511,8 +5623,11 @@ mod tests {
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
         let mut repo = MockAssetRepository::new();
         repo.add_option_asset(option_symbol, "USD");
-        let calculator =
-            HoldingsCalculator::new(Arc::new(mock_fx_service), base_currency, Arc::new(repo));
+        let mut calculator = CalcHarness::new(HoldingsCalculator::new(
+            Arc::new(mock_fx_service),
+            base_currency,
+            Arc::new(repo),
+        ));
 
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2026-06-25");
         let mut sell_to_close = create_default_activity(
@@ -5551,7 +5666,7 @@ mod tests {
 
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2026-06-25");
 
         let sell = create_default_activity(
@@ -5581,7 +5696,7 @@ mod tests {
 
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2026-06-25");
 
         let mut sell_short = create_default_activity(
@@ -5625,7 +5740,7 @@ mod tests {
 
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2026-06-25");
 
         let mut first_short = create_default_activity(
@@ -5682,7 +5797,7 @@ mod tests {
 
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2026-06-25");
 
         let mut sell_short = create_default_activity(
@@ -5748,7 +5863,7 @@ mod tests {
 
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2026-06-25");
 
         let mut sell_short = create_default_activity(
@@ -5802,7 +5917,7 @@ mod tests {
 
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2026-06-25");
 
         let mut cover = create_default_activity(
@@ -5839,7 +5954,7 @@ mod tests {
 
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2026-06-25");
 
         let mut sell_short = create_default_activity(
@@ -5897,7 +6012,7 @@ mod tests {
 
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2026-06-25");
 
         let mut sell_short = create_default_activity(
@@ -5955,7 +6070,7 @@ mod tests {
 
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2026-06-25");
 
         let mut sell_short = create_default_activity(
@@ -6012,7 +6127,7 @@ mod tests {
 
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2026-06-24");
 
         let buy = create_default_activity(
@@ -6070,7 +6185,7 @@ mod tests {
 
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2026-06-25");
 
         let mut sell_short = create_default_activity(
@@ -6132,7 +6247,7 @@ mod tests {
 
         mock_fx_service.add_bidirectional_rate("USD", "EUR", buy_date, dec!(0.92));
 
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let mut prev = create_initial_snapshot("acc_no_fx", account_currency, "2024-04-14");
         prev.cash_balances.insert("EUR".to_string(), dec!(10000));
@@ -6209,7 +6324,7 @@ mod tests {
         // The lots in acc_b should have the original acquisition date and price.
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let buy_date_str = "2023-01-01";
         let transfer_date_str = "2023-06-01";
@@ -6323,7 +6438,7 @@ mod tests {
         // Transfer in should recreate those exact lots.
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let prev_a = create_initial_snapshot("acc_a", "USD", "2022-12-31");
 
@@ -6454,7 +6569,7 @@ mod tests {
         // Should use the activity's unit_price as acquisition price.
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let prev = create_initial_snapshot("acc_b", "USD", "2023-05-31");
         let transfer_date = NaiveDate::from_str("2023-06-01").unwrap();
@@ -6493,7 +6608,7 @@ mod tests {
     fn test_external_transfer_in_ignores_legacy_amount_when_unit_price_is_present() {
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let prev = create_initial_snapshot("acc_b", "USD", "2023-05-31");
         let transfer_date = NaiveDate::from_str("2023-06-01").unwrap();
@@ -6530,7 +6645,7 @@ mod tests {
     fn test_external_transfer_in_uses_legacy_amount_as_last_resort_lot_basis_without_unit_price() {
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let prev = create_initial_snapshot("acc_b", "USD", "2023-05-31");
         let transfer_date = NaiveDate::from_str("2023-06-01").unwrap();
@@ -6569,7 +6684,7 @@ mod tests {
         // Should not panic; fee is still applied.
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let prev = create_initial_snapshot("acc_a", "USD", "2023-05-31");
         let transfer_date = NaiveDate::from_str("2023-06-01").unwrap();
@@ -6611,7 +6726,7 @@ mod tests {
         mock_fx_service.add_bidirectional_rate("EUR", "USD", transfer_date, dec!(1.10));
 
         let base_currency = Arc::new(RwLock::new("CAD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         // Account A (CAD): Buy 10 AAPL @ 100 CAD
         let prev_a = create_initial_snapshot("acc_a", "CAD", "2022-12-31");
@@ -6695,7 +6810,7 @@ mod tests {
         // Each TRANSFER_IN should only consume its own cached lots.
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let buy_date = NaiveDate::from_str("2023-01-01").unwrap();
         let transfer_date = NaiveDate::from_str("2023-06-01").unwrap();
@@ -6812,8 +6927,11 @@ mod tests {
         let mut repo = MockAssetRepository::new();
         repo.add_option_asset("AAPL240119C00150000", "USD");
 
-        let calculator =
-            HoldingsCalculator::new(Arc::new(mock_fx_service), base_currency, Arc::new(repo));
+        let mut calculator = CalcHarness::new(HoldingsCalculator::new(
+            Arc::new(mock_fx_service),
+            base_currency,
+            Arc::new(repo),
+        ));
 
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2023-12-31");
 
@@ -6859,8 +6977,11 @@ mod tests {
         // Use a bare MockAssetRepository with NO assets
         let repo = MockAssetRepository::new();
 
-        let calculator =
-            HoldingsCalculator::new(Arc::new(mock_fx_service), base_currency, Arc::new(repo));
+        let mut calculator = CalcHarness::new(HoldingsCalculator::new(
+            Arc::new(mock_fx_service),
+            base_currency,
+            Arc::new(repo),
+        ));
 
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2023-12-31");
 
@@ -6908,8 +7029,11 @@ mod tests {
         let mut repo = MockAssetRepository::new();
         repo.add_option_asset("AAPL250321C00150000", "USD");
 
-        let calculator =
-            HoldingsCalculator::new(Arc::new(mock_fx_service), base_currency, Arc::new(repo));
+        let mut calculator = CalcHarness::new(HoldingsCalculator::new(
+            Arc::new(mock_fx_service),
+            base_currency,
+            Arc::new(repo),
+        ));
 
         let previous_snapshot = create_initial_snapshot("acc_1", "USD", "2024-12-31");
 
@@ -7007,8 +7131,11 @@ mod tests {
         let mut repo = MockAssetRepository::new();
         repo.add_option_asset("AAPL250321C00150000", "USD");
 
-        let calculator =
-            HoldingsCalculator::new(Arc::new(mock_fx_service), base_currency, Arc::new(repo));
+        let mut calculator = CalcHarness::new(HoldingsCalculator::new(
+            Arc::new(mock_fx_service),
+            base_currency,
+            Arc::new(repo),
+        ));
 
         let buy_date_str = "2025-01-02";
         let transfer_date_str = "2025-06-01";
@@ -7120,8 +7247,11 @@ mod tests {
         let mut repo = MockAssetRepository::new();
         repo.add_option_asset(option_symbol, "USD");
 
-        let calculator =
-            HoldingsCalculator::new(Arc::new(mock_fx_service), base_currency, Arc::new(repo));
+        let mut calculator = CalcHarness::new(HoldingsCalculator::new(
+            Arc::new(mock_fx_service),
+            base_currency,
+            Arc::new(repo),
+        ));
 
         let open_date_str = "2025-01-02";
         let transfer_date_str = "2025-06-01";
@@ -7211,7 +7341,7 @@ mod tests {
     fn test_short_stock_transfer_preserves_signed_lot() {
         let mock_fx_service = MockFxService::new();
         let base_currency = Arc::new(RwLock::new("USD".to_string()));
-        let calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
+        let mut calculator = create_calculator(Arc::new(mock_fx_service), base_currency);
 
         let open_date_str = "2026-06-26";
         let transfer_date_str = "2026-06-27";
@@ -7290,5 +7420,215 @@ mod tests {
         assert_eq!(pos_b.lots.len(), 1);
         assert_eq!(pos_b.lots[0].quantity, dec!(-4));
         assert_eq!(pos_b.lots[0].cost_basis, dec!(-400));
+    }
+
+    // =====================================================================
+    // Atomicity contract (Phase 1 of the holdings-calculator refactor).
+    //
+    // These pin the all-or-nothing rule: a handler that returns Err must
+    // leave NO partial mutation behind — cash, lots, and disposals included.
+    // The only side effect of a failed activity is a warning in the result.
+    //
+    // The deterministically reachable bug today is in `handle_sell`, which
+    // books cash via `add_cash` BEFORE the fallible FX conversion of the
+    // proceeds into the position currency. With the position quoted in a
+    // different currency than the SELL and no FX rate available, the
+    // conversion errors *after* cash is already booked.
+    //
+    // `*_books_no_spurious_cash` / `*_isolated_from_later_activity` are
+    // RED today (they assert the post-fix behavior) and go green in Phase 2.
+    // `cash_only_sell_*` is GREEN today and guards Phase 2 against
+    // over-rollback of intentional cash-only `Ok` paths.
+    // =====================================================================
+
+    /// Builds an EUR account holding 10 EUR-listed shares (ADS.DE), with an
+    /// FX service that has no USD<->EUR rate. A later SELL priced in USD will
+    /// book USD cash and then fail converting the proceeds into EUR.
+    fn eur_account_with_long_position_and_no_usd_rate() -> (CalcHarness, AccountStateSnapshot) {
+        let mut calculator = create_calculator(
+            Arc::new(MockFxService::new()),
+            Arc::new(RwLock::new("EUR".to_string())),
+        );
+
+        let mut prev = create_initial_snapshot("acc_1", "EUR", "2024-01-09");
+        prev.cash_balances.insert("EUR".to_string(), dec!(5000));
+        prev.cash_total_account_currency = dec!(5000);
+        prev.cash_total_base_currency = dec!(5000);
+
+        let buy = create_default_activity(
+            "buy_ads",
+            ActivityType::Buy,
+            "ADS.DE",
+            dec!(10),
+            dec!(100),
+            Decimal::ZERO,
+            "EUR",
+            "2024-01-10",
+        );
+        let after_buy = calculator
+            .calculate_next_holdings(&prev, &[buy], NaiveDate::from_str("2024-01-10").unwrap())
+            .expect("EUR buy should succeed")
+            .snapshot;
+
+        (calculator, after_buy)
+    }
+
+    /// A SELL that errors after booking cash must not leave the booked cash,
+    /// must not reduce lots, and must not record a disposal. RED until Phase 2.
+    #[test]
+    fn atomicity_failed_sell_books_no_spurious_cash() {
+        let (mut calculator, after_buy) = eur_account_with_long_position_and_no_usd_rate();
+
+        // SELL priced in USD with no fx_rate; USD->EUR conversion has no rate.
+        let bad_sell = create_default_activity(
+            "sell_usd_no_rate",
+            ActivityType::Sell,
+            "ADS.DE",
+            dec!(5),
+            dec!(120),
+            Decimal::ZERO,
+            "USD",
+            "2024-02-10",
+        );
+        let result = calculator
+            .calculate_next_holdings(
+                &after_buy,
+                &[bad_sell],
+                NaiveDate::from_str("2024-02-10").unwrap(),
+            )
+            .expect("run loop swallows the activity error into a warning");
+
+        // The failure surfaces only as a warning.
+        assert_eq!(result.warnings.len(), 1, "expected exactly one warning");
+
+        // No spurious USD cash booked from the failed SELL.
+        let usd_cash = result
+            .snapshot
+            .cash_balances
+            .get("USD")
+            .copied()
+            .unwrap_or(Decimal::ZERO);
+        assert_eq!(
+            usd_cash,
+            Decimal::ZERO,
+            "failed SELL must not leave booked USD cash (partial mutation)"
+        );
+
+        // Position is untouched: still 10 long shares.
+        let pos = result
+            .snapshot
+            .positions
+            .get("ADS.DE")
+            .expect("position should still exist");
+        assert_eq!(pos.quantity, dec!(10), "lots must not be reduced");
+
+        // No disposal recorded for the failed activity.
+        let disposals = calculator.take_lot_disposals("acc_1", "FIFO");
+        assert!(
+            disposals.is_empty(),
+            "failed SELL must not record a disposal"
+        );
+    }
+
+    /// A failed activity must not corrupt other activities processed the same
+    /// day; only its own effects are dropped. RED until Phase 2.
+    #[test]
+    fn atomicity_failed_sell_isolated_from_later_activity() {
+        let (mut calculator, after_buy) = eur_account_with_long_position_and_no_usd_rate();
+
+        let bad_sell = create_default_activity(
+            "sell_usd_no_rate",
+            ActivityType::Sell,
+            "ADS.DE",
+            dec!(5),
+            dec!(120),
+            Decimal::ZERO,
+            "USD",
+            "2024-02-10",
+        );
+        // A good EUR deposit on the same day must land fully.
+        let good_deposit = create_cash_activity(
+            "deposit_eur",
+            ActivityType::Deposit,
+            dec!(200),
+            Decimal::ZERO,
+            "EUR",
+            "2024-02-10",
+        );
+
+        let result = calculator
+            .calculate_next_holdings(
+                &after_buy,
+                &[bad_sell, good_deposit],
+                NaiveDate::from_str("2024-02-10").unwrap(),
+            )
+            .expect("run loop continues past the failed activity");
+
+        assert_eq!(result.warnings.len(), 1, "only the SELL should warn");
+
+        // The good deposit applied: 4000 (5000 seed minus the 1000 buy) + 200.
+        assert_eq!(
+            result.snapshot.cash_balances.get("EUR").copied(),
+            Some(dec!(4200)),
+            "later deposit must apply fully"
+        );
+
+        // The failed SELL left no USD residue.
+        let usd_cash = result
+            .snapshot
+            .cash_balances
+            .get("USD")
+            .copied()
+            .unwrap_or(Decimal::ZERO);
+        assert_eq!(
+            usd_cash,
+            Decimal::ZERO,
+            "failed SELL must not leak USD cash into the day's result"
+        );
+    }
+
+    /// Selling a position that does not exist is an INTENTIONAL cash-only
+    /// `Ok` path (not a failure). Phase 2 must keep applying the cash effect
+    /// and must not roll it back. GREEN today — a guard against over-rollback.
+    #[test]
+    fn atomicity_cash_only_sell_of_unknown_position_stays_ok() {
+        let mut calculator = create_calculator(
+            Arc::new(MockFxService::new()),
+            Arc::new(RwLock::new("USD".to_string())),
+        );
+
+        let mut prev = create_initial_snapshot("acc_1", "USD", "2024-01-09");
+        prev.cash_balances.insert("USD".to_string(), dec!(1000));
+        prev.cash_total_account_currency = dec!(1000);
+        prev.cash_total_base_currency = dec!(1000);
+
+        // No AAPL position exists; SELL applies cash-only and returns Ok.
+        let sell = create_default_activity(
+            "sell_no_position",
+            ActivityType::Sell,
+            "AAPL",
+            dec!(5),
+            dec!(100),
+            Decimal::ZERO,
+            "USD",
+            "2024-02-10",
+        );
+        let result = calculator
+            .calculate_next_holdings(&prev, &[sell], NaiveDate::from_str("2024-02-10").unwrap())
+            .expect("cash-only sell returns Ok");
+
+        assert!(
+            result.warnings.is_empty(),
+            "intentional cash-only sell is not a failure"
+        );
+        assert_eq!(
+            result.snapshot.cash_balances.get("USD").copied(),
+            Some(dec!(1500)),
+            "cash-only sell must still apply proceeds (1000 + 500)"
+        );
+        assert!(
+            !result.snapshot.positions.contains_key("AAPL"),
+            "no position should be created"
+        );
     }
 }

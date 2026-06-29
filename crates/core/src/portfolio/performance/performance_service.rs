@@ -4936,7 +4936,9 @@ mod tests {
     };
     use crate::fx::{ExchangeRate, FxServiceTrait, NewExchangeRate};
     use crate::lots::{AssetLotView, LotClosure};
-    use crate::portfolio::snapshot::{AccountStateSnapshot, HoldingsCalculator, Lot, Position};
+    use crate::portfolio::snapshot::{
+        AccountStateSnapshot, HoldingsCalculator, Lot, Position, ProjectionRun,
+    };
     use crate::portfolio::valuation::ValuationStatus;
     use crate::portfolio::valuation::{
         ExternalFlowSource, NegativeBalanceInfo, ValuationRecalcMode,
@@ -6365,8 +6367,10 @@ mod tests {
             Arc::new(RwLock::new("USD".to_string())),
             Arc::new(TestAssetRepository),
         );
+        let mut run = ProjectionRun::new();
         let result = calculator
             .calculate_next_holdings(
+                &mut run,
                 &previous_snapshot,
                 &[sell_activity("sell-1", account_id, dec!(4), dec!(120))],
                 sell_date,
@@ -6381,7 +6385,7 @@ mod tests {
         assert_eq!(position.quantity, dec!(6));
         assert_eq!(position.total_cost_basis, dec!(600));
 
-        let disposals = calculator.take_lot_disposals(account_id, "FIFO");
+        let disposals = run.take_lot_disposals(account_id, "FIFO");
         assert_eq!(disposals.len(), 1);
         disposals.into_iter().next().unwrap()
     }
@@ -6440,8 +6444,10 @@ mod tests {
             Arc::new(RwLock::new("USD".to_string())),
             Arc::new(TestAssetRepository),
         );
+        let mut run = ProjectionRun::new();
         let split_result = calculator
             .calculate_next_holdings(
+                &mut run,
                 &previous_snapshot,
                 &[split_activity_on(
                     "split-1",
@@ -6465,6 +6471,7 @@ mod tests {
 
         let sell_result = calculator
             .calculate_next_holdings(
+                &mut run,
                 &split_result.snapshot,
                 &[sell_activity_on(
                     "sell-split-1",
@@ -6487,7 +6494,7 @@ mod tests {
         assert_eq!(position.lots[0].quantity, dec!(7));
         assert_eq!(position.lots[0].split_ratio, dec!(2));
 
-        let disposals = calculator.take_lot_disposals(account_id, "FIFO");
+        let disposals = run.take_lot_disposals(account_id, "FIFO");
         assert_eq!(disposals.len(), 1);
         disposals.into_iter().next().unwrap()
     }
