@@ -10,7 +10,7 @@ use rust_decimal::Decimal;
 
 /// Splits single-signed FIFO `lots` into a (cover, residual) pair so the first
 /// `cover_qty_abs` effective units land in `cover` and the rest in `residual`.
-/// A lot straddling the boundary is prorated by quantity (cost basis and fees
+/// A lot straddling the boundary is prorated by quantity (cost basis, fees, taxes
 /// split proportionally). `cover_qty_abs` is in effective (post-split) units.
 fn split_lots_by_cover_quantity(lots: &[Lot], cover_qty_abs: Decimal) -> (Vec<Lot>, Vec<Lot>) {
     let mut cover = Vec::new();
@@ -45,6 +45,7 @@ fn split_lots_by_cover_quantity(lots: &[Lot], cover_qty_abs: Decimal) -> (Vec<Lo
 
         let cover_cost_basis = lot.cost_basis * cover_fraction;
         let cover_fees = lot.acquisition_fees * cover_fraction;
+        let cover_taxes = lot.acquisition_taxes * cover_fraction;
         let residual_quantity = lot.quantity - consumed_signed;
 
         let mut cover_lot = lot.clone();
@@ -53,6 +54,8 @@ fn split_lots_by_cover_quantity(lots: &[Lot], cover_qty_abs: Decimal) -> (Vec<Lo
         cover_lot.cost_basis = cover_cost_basis;
         cover_lot.acquisition_fees = cover_fees;
         cover_lot.original_acquisition_fees = cover_fees;
+        cover_lot.acquisition_taxes = cover_taxes;
+        cover_lot.original_acquisition_taxes = cover_taxes;
         cover.push(cover_lot);
 
         let mut residual_lot = lot.clone();
@@ -61,6 +64,8 @@ fn split_lots_by_cover_quantity(lots: &[Lot], cover_qty_abs: Decimal) -> (Vec<Lo
         residual_lot.cost_basis = lot.cost_basis - cover_cost_basis;
         residual_lot.acquisition_fees = lot.acquisition_fees - cover_fees;
         residual_lot.original_acquisition_fees = lot.acquisition_fees - cover_fees;
+        residual_lot.acquisition_taxes = lot.acquisition_taxes - cover_taxes;
+        residual_lot.original_acquisition_taxes = lot.acquisition_taxes - cover_taxes;
         residual.push(residual_lot);
 
         remaining = Decimal::ZERO;

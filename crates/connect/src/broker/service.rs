@@ -431,6 +431,8 @@ impl BrokerSyncServiceTrait for BrokerSyncService {
                 act.quantity,
                 act.unit_price,
                 act.amount,
+                act.fee,
+                act.tax,
                 &act.currency,
                 act.source_record_id.as_deref(),
                 act.notes.as_deref(),

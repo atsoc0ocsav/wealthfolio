@@ -7722,6 +7722,126 @@ mod tests {
     }
 
     #[test]
+    fn test_transfer_in_partial_cover_prorates_residual_lot_taxes() {
+        let option_symbol = "AAPL250321P00150000";
+        let mock_fx_service = MockFxService::new();
+        let base_currency = Arc::new(RwLock::new("USD".to_string()));
+
+        let mut repo = MockAssetRepository::new();
+        repo.add_option_asset(option_symbol, "USD");
+
+        let mut calculator = CalcHarness::new(HoldingsCalculator::new(
+            Arc::new(mock_fx_service),
+            base_currency,
+            Arc::new(repo),
+        ));
+
+        let open_date_str = "2025-01-02";
+        let transfer_date_str = "2025-06-01";
+        let open_date = NaiveDate::from_str(open_date_str).unwrap();
+        let transfer_date = NaiveDate::from_str(transfer_date_str).unwrap();
+
+        // Source account opens two long option contracts with acquisition charges,
+        // then transfers both out. The target account has one resident short, so
+        // only half of the incoming lot covers; the other half is added as a new lot.
+        let prev_src = create_initial_snapshot("acc_src", "USD", "2024-12-31");
+        let buy_long = {
+            let mut a = create_default_activity(
+                "buy_taxed_long_opt",
+                ActivityType::Buy,
+                option_symbol,
+                dec!(2),
+                dec!(1),
+                dec!(10),
+                "USD",
+                open_date_str,
+            );
+            a.account_id = "acc_src".to_string();
+            a.tax = Some(dec!(4));
+            a
+        };
+        let result_src_open = calculator
+            .calculate_next_holdings(&prev_src, std::slice::from_ref(&buy_long), open_date)
+            .unwrap();
+        let pos_src = result_src_open
+            .snapshot
+            .positions
+            .get(option_symbol)
+            .expect("source account should hold long option");
+        assert_eq!(pos_src.quantity, dec!(2));
+        assert_eq!(pos_src.total_cost_basis, dec!(214));
+
+        let transfer_out = create_transfer_activity(
+            "xfer_out_taxed_long_opt",
+            ActivityType::TransferOut,
+            option_symbol,
+            dec!(2),
+            dec!(0),
+            dec!(0),
+            "USD",
+            transfer_date_str,
+            "acc_src",
+            Some("grp_taxed_cover"),
+        );
+        calculator
+            .calculate_next_holdings(&result_src_open.snapshot, &[transfer_out], transfer_date)
+            .unwrap();
+
+        let prev_a = create_initial_snapshot("acc_a", "USD", "2024-12-31");
+        let sell_short = {
+            let mut a = create_default_activity(
+                "sell_to_open_short_opt",
+                ActivityType::Sell,
+                option_symbol,
+                dec!(1),
+                dec!(2.5),
+                dec!(0),
+                "USD",
+                open_date_str,
+            );
+            a.account_id = "acc_a".to_string();
+            a
+        };
+        let result_a_open = calculator
+            .calculate_next_holdings(&prev_a, std::slice::from_ref(&sell_short), open_date)
+            .unwrap();
+
+        let transfer_in = create_transfer_activity(
+            "xfer_in_taxed_long_opt",
+            ActivityType::TransferIn,
+            option_symbol,
+            dec!(2),
+            dec!(0),
+            dec!(0),
+            "USD",
+            transfer_date_str,
+            "acc_a",
+            Some("grp_taxed_cover"),
+        );
+        let result_a_xfer = calculator
+            .calculate_next_holdings(&result_a_open.snapshot, &[transfer_in], transfer_date)
+            .unwrap();
+
+        let pos_a_after = result_a_xfer
+            .snapshot
+            .positions
+            .get(option_symbol)
+            .expect("account A should hold the residual long");
+        assert_eq!(pos_a_after.quantity, dec!(1));
+        assert_eq!(pos_a_after.total_cost_basis, dec!(107));
+        assert_eq!(pos_a_after.lots.len(), 1);
+
+        let residual_lot = &pos_a_after.lots[0];
+        assert_eq!(residual_lot.quantity, dec!(1));
+        assert_eq!(residual_lot.original_quantity, dec!(1));
+        assert_eq!(residual_lot.cost_basis, dec!(107));
+        assert_eq!(residual_lot.acquisition_fees, dec!(5));
+        assert_eq!(residual_lot.original_acquisition_fees, dec!(5));
+        assert_eq!(residual_lot.acquisition_taxes, dec!(2));
+        assert_eq!(residual_lot.original_acquisition_taxes, dec!(2));
+    }
+
+    #[test]
     fn test_transfer_in_short_covers_resident_long_option_no_mixed_position() {
         // Mirror of the long-covers-short case: Account A holds a LONG option
         // (+2). A TRANSFER_IN brings a SHORT (-1) of the same option via cached

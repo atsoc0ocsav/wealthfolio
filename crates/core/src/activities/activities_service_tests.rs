@@ -2913,6 +2913,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_allows_same_trade_with_different_tax() {
+        let account_service = Arc::new(MockAccountService::new());
+        let asset_service = Arc::new(MockAssetService::new());
+        let fx_service = Arc::new(MockFxService::new());
+        let activity_repository = Arc::new(MockActivityRepository::new());
+
+        account_service.add_account(create_test_account("acc-1", "USD"));
+        asset_service.add_asset(create_test_asset("AAPL", "USD"));
+
+        let quote_service = Arc::new(MockQuoteService);
+        let activity_service = ActivityService::new(
+            activity_repository.clone(),
+            account_service,
+            asset_service,
+            fx_service,
+            quote_service,
+        );
+
+        let taxable_activity = NewActivity {
+            id: None,
+            account_id: "acc-1".to_string(),
+            asset: Some(AssetResolutionInput {
+                id: Some("AAPL".to_string()),
+                ..Default::default()
+            }),
+            activity_type: "BUY".to_string(),
+            subtype: None,
+            activity_date: "2026-02-27T21:32:00Z".to_string(),
+            quantity: Some(dec!(25)),
+            unit_price: Some(dec!(51.90)),
+            currency: "USD".to_string(),
+            fee: Some(dec!(0)),
+            tax: Some(dec!(1)),
+            amount: None,
+            status: None,
+            notes: None,
+            fx_rate: None,
+            metadata: None,
+            needs_review: None,
+            source_system: None,
+            source_record_id: None,
+            source_group_id: None,
+            idempotency_key: None,
+            import_run_id: None,
+        };
+
+        activity_service
+            .create_activity(taxable_activity.clone())
+            .await
+            .expect("first create should succeed");
+
+        let mut different_tax_activity = taxable_activity;
+        different_tax_activity.tax = Some(dec!(2));
+        activity_service
+            .create_activity(different_tax_activity)
+            .await
+            .expect("same trade with different tax should not be a duplicate");
+
+        let stored = activity_repository
+            .get_activities()
+            .expect("stored activities should be readable");
+        assert_eq!(stored.len(), 2);
+        assert_ne!(stored[0].idempotency_key, stored[1].idempotency_key);
+    }
+
+    #[tokio::test]
     async fn test_source_record_id_changes_idempotency_for_provider_create() {
         let account_service = Arc::new(MockAccountService::new());
         let asset_service = Arc::new(MockAssetService::new());
@@ -8181,6 +8247,8 @@ mod tests {
             None,
             None,
             Some(dec!(500)),
+            None,
+            None,
             "USD",
             None,
             None,
@@ -9161,6 +9229,8 @@ mod tests {
             Some(dec!(1)),
             Some(dec!(100)),
             Some(dec!(100)),
+            None,
+            None,
             "GBP",
             None,
             None,
@@ -9374,6 +9444,8 @@ mod tests {
             Some(dec!(1)),
             Some(dec!(100)),
             Some(dec!(100)),
+            None,
+            None,
             "GBP",
             None,
             None,
