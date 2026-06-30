@@ -519,6 +519,17 @@ function transformRowToActivity(
   if (activity.tax !== undefined && isNaN(activity.tax)) activity.tax = 0;
   if (activity.amount !== undefined && isNaN(activity.amount)) activity.amount = undefined;
 
+  const standaloneTaxAmount = toNum(activity.tax);
+  if (
+    activity.activityType === ActivityType.TAX &&
+    !toNum(activity.amount) &&
+    !toNum(activity.fee) &&
+    standaloneTaxAmount
+  ) {
+    activity.amount = Math.abs(standaloneTaxAmount);
+    activity.tax = undefined;
+  }
+
   if (activity.activityType === ActivityType.SPLIT) {
     activity.quantity = undefined;
     activity.unitPrice = undefined;

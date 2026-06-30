@@ -265,6 +265,34 @@ describe("validation-utils", () => {
       expect(activity.tax).toBe(0.11);
     });
 
+    it("should use a tax column as the cash amount for standalone TAX activities", () => {
+      const testData = [
+        {
+          lineNumber: "1",
+          date: "2024-01-01T00:00:00.000Z",
+          symbol: "",
+          activityType: "TAX",
+          quantity: "",
+          unitPrice: "",
+          amount: "",
+          fee: "0",
+          tax: "-58.22",
+          currency: "USD",
+        },
+      ];
+
+      const result = validateActivityImport(testData, testMapping, "test-account", "USD");
+
+      expect(result.activities).toHaveLength(1);
+      const activity = result.activities[0];
+
+      expect(activity.isValid).toBe(true);
+      expect(activity.activityType).toBe(ActivityType.TAX);
+      expect(activity.amount).toBe(58.22);
+      expect(activity.fee).toBe(0);
+      expect(activity.tax).toBe(0);
+    });
+
     it("should convert negative values to positive for DEPOSIT activities", () => {
       const testData = [
         {

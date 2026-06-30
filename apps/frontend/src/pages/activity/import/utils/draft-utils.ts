@@ -634,10 +634,10 @@ export function createDraftActivities(
       normalizedCsvInstrumentType || prefixInstrumentType || mappedInstrumentType;
     const quantity = parseNumericValue(rawQuantity, decimalSeparator, thousandsSeparator);
     const unitPrice = parseNumericValue(rawUnitPrice, decimalSeparator, thousandsSeparator);
-    const amount = parseNumericValue(rawAmount, decimalSeparator, thousandsSeparator);
+    let amount = parseNumericValue(rawAmount, decimalSeparator, thousandsSeparator);
     const currency = rawCurrency?.trim() || defaultCurrency;
     const fee = parseNumericValue(rawFee, decimalSeparator, thousandsSeparator);
-    const tax = parseNumericValue(rawTax, decimalSeparator, thousandsSeparator);
+    let tax = parseNumericValue(rawTax, decimalSeparator, thousandsSeparator);
     const comment = rawComment?.trim();
     const fxRate = parseNumericValue(rawFxRate, decimalSeparator, thousandsSeparator);
     const signedFxSubtype = signedFxTransferType
@@ -673,6 +673,15 @@ export function createDraftActivities(
 
     // For cash-like activities, some brokers (e.g. Schwab) put the dollar value
     // in the Quantity column instead of Amount.
+    if (
+      activityType === ActivityType.TAX &&
+      !hasPositiveValue(amount) &&
+      !hasPositiveValue(fee) &&
+      hasPositiveValue(tax)
+    ) {
+      amount = tax;
+      tax = undefined;
+    }
     const resolved = resolveCashActivityFields(activityType, quantity, amount, unitPrice, subtype);
 
     // Infer isExternal for transfers: external unless the raw CSV label says "INTERNAL"
