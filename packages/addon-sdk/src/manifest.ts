@@ -4,6 +4,11 @@
 
 import type { Permission } from './permissions';
 
+export interface AddonNetworkAccess {
+  allowedHosts: string[];
+  approvedHosts?: string[];
+}
+
 /**
  * Unified addon manifest structure that handles both development and runtime scenarios
  * This represents both what developers write in their manifest.json and installed addon metadata
@@ -40,6 +45,8 @@ export interface AddonManifest {
   keywords?: string[];
   /** Addon icon (base64 or relative path) */
   icon?: string;
+  /** Network hosts this addon may reach through the host broker */
+  network?: AddonNetworkAccess;
 
   // Runtime fields (only present after installation)
   /** Installation timestamp in ISO format */
@@ -154,6 +161,8 @@ export interface AddonUpdateInfo {
   updateAvailable: boolean;
   /** Download URL for the update */
   downloadUrl?: string;
+  /** Optional SHA-256 digest for the update package bytes */
+  sha256?: string;
   /** Release notes for the latest version */
   releaseNotes?: string;
   /** Release date of the latest version */
@@ -188,6 +197,8 @@ export interface AddonStoreListing {
   metadata: AddonManifest;
   /** Download URL */
   downloadUrl: string;
+  /** Optional SHA-256 digest for the package bytes */
+  sha256?: string;
   /** Number of downloads */
   downloads?: number;
   /** Average rating */
