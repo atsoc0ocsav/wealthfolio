@@ -2157,7 +2157,8 @@ export interface NavigateAction {
 export interface FixAction {
   id: string;
   label: string;
-  payload: Record<string, unknown>;
+  /** Arbitrary JSON payload (e.g. an array of asset IDs); shape varies by action id. */
+  payload: unknown;
 }
 
 /**
@@ -2168,6 +2169,78 @@ export interface AffectedItem {
   name: string;
   symbol?: string;
   route?: string;
+}
+
+/**
+ * A single supporting-evidence row for a diagnostic.
+ */
+export interface Evidence {
+  label: string;
+  value: string;
+  route?: string;
+}
+
+/**
+ * An ordered remediation action attached to a diagnostic.
+ *
+ * Serialized flat with a `kind` discriminator: `fix` carries the {@link FixAction}
+ * fields (id/label/payload); `navigate` carries the {@link NavigateAction} fields
+ * (route/query/label).
+ */
+export type DiagnosticAction = { primary: boolean } & (
+  | ({ kind: "fix" } & FixAction)
+  | ({ kind: "navigate" } & NavigateAction)
+);
+
+export type DiagnosticDomain =
+  | "unknown"
+  | "accountSetup"
+  | "ledger"
+  | "marketData"
+  | "fx"
+  | "classification"
+  | "generatedData"
+  | "performanceInputs";
+
+export type DiagnosticLevel = "source" | "generated" | "workflow";
+
+export interface HealthImpact {
+  affectedCount?: number;
+  affectedMvPct?: number;
+  amount?: number;
+  currency?: string;
+  description?: string;
+}
+
+export interface HealthEntityRef {
+  kind: string;
+  id: string;
+  label?: string;
+  route?: string;
+}
+
+export interface HealthDateRange {
+  start: string;
+  end: string;
+}
+
+/**
+ * A structured diagnostic: root cause, supporting evidence, and ordered actions.
+ */
+export interface HealthDiagnostic {
+  fingerprint: string;
+  domain: DiagnosticDomain;
+  level: DiagnosticLevel;
+  severity: HealthSeverity;
+  code: string;
+  title: string;
+  explanation: string;
+  impact?: HealthImpact;
+  entities: HealthEntityRef[];
+  date?: string;
+  dateRange?: HealthDateRange;
+  evidence: Evidence[];
+  actions: DiagnosticAction[];
 }
 
 /**
@@ -2185,6 +2258,7 @@ export interface HealthIssue {
   navigateAction?: NavigateAction;
   details?: string;
   affectedItems?: AffectedItem[];
+  diagnostics?: HealthDiagnostic[];
   dataHash: string;
   timestamp: string;
 }

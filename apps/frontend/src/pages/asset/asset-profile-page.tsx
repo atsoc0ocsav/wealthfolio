@@ -126,6 +126,7 @@ interface AssetDetailData {
 
 type AssetTab = "overview" | "history";
 type OverviewSubTab = "about" | "holdings" | "activities" | "snapshots" | "quotes";
+type AssetHealthContext = "price" | "basis" | "activity";
 
 const REGULAR_SUB_TAB_VALUES: OverviewSubTab[] = [
   "about",
@@ -145,6 +146,107 @@ const parseSubTabParam = (param: string | null): OverviewSubTab => {
   return "about";
 };
 
+const parseHealthContext = (value: string | null): AssetHealthContext | null => {
+  if (value === "price" || value === "basis" || value === "activity") {
+    return value;
+  }
+  return null;
+};
+
+const formatHealthDate = (value: string | null): string | null => {
+  if (!value) return null;
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(date);
+};
+
+function AssetHealthBanner({
+  context,
+  isManualPricingMode,
+  date,
+  canRefreshPrices,
+  isRefreshingPrices,
+  onRefreshPrices,
+  onClear,
+}: {
+  context: AssetHealthContext | null;
+  isManualPricingMode: boolean;
+  date: string | null;
+  canRefreshPrices: boolean;
+  isRefreshingPrices: boolean;
+  onRefreshPrices: () => void;
+  onClear: () => void;
+}) {
+  if (!context) return null;
+
+  const dateLabel = formatHealthDate(date);
+  const copy =
+    context === "price"
+      ? isManualPricingMode
+        ? {
+            title: dateLabel ? `Add a price for ${dateLabel}` : "Manual prices need review",
+            description: dateLabel
+              ? "Wealthfolio is carrying forward the last price. Add this date only if it needs its own value."
+              : "Review the missing dates. Add prices that need their own value; carried-forward prices are still used between entries.",
+          }
+        : {
+            title: dateLabel ? `Price missing for ${dateLabel}` : "Price history needs review",
+            description: dateLabel
+              ? "Wealthfolio is carrying forward the last available price. Refetch prices if this was a trading day."
+              : "Refetch provider history to restore missing or stale prices. Carried-forward prices are used until exact prices are available.",
+          }
+      : context === "basis"
+        ? {
+            title: "Cost basis needs review",
+            description:
+              "Update what you paid for this holding so Wealthfolio can calculate gain/loss.",
+          }
+        : {
+            title: "Transactions need review",
+            description: "Review the transactions Health Center flagged for this investment.",
+          };
+
+  return (
+    <div className="border-warning/30 bg-warning/10 mb-4 rounded-md border px-3 py-3">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="flex min-w-0 items-start gap-2">
+          <Icons.AlertTriangle className="text-warning mt-0.5 h-4 w-4 shrink-0" />
+          <div className="min-w-0 space-y-1">
+            <p className="text-sm font-medium">{copy.title}</p>
+            <p className="text-muted-foreground text-sm leading-relaxed">{copy.description}</p>
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2 md:justify-end">
+          {context === "price" && !isManualPricingMode && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!canRefreshPrices || isRefreshingPrices}
+              onClick={onRefreshPrices}
+            >
+              {isRefreshingPrices ? (
+                <Icons.Spinner className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Icons.Refresh className="mr-2 h-4 w-4" />
+              )}
+              Refetch Prices
+            </Button>
+          )}
+          <Button type="button" variant="ghost" size="sm" onClick={onClear}>
+            Clear
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export const AssetProfilePage = () => {
   const { settings } = useSettingsContext();
   const baseCurrency = settings?.baseCurrency ?? "USD";
@@ -154,6 +256,8 @@ export const AssetProfilePage = () => {
   const navigate = useNavigate();
   const queryParams = new URLSearchParams(location.search);
   const tabParam = queryParams.get("tab");
+  const healthContext = parseHealthContext(queryParams.get("healthContext"));
+  const healthDate = queryParams.get("date");
   // activeTab is only used by alternative assets (Overview | Values).
   const defaultTab: AssetTab = tabParam === "history" ? "history" : "overview";
   const [activeTab, setActiveTab] = useState<AssetTab>(defaultTab);
@@ -936,6 +1040,14 @@ export const AssetProfilePage = () => {
     navigate(-1);
   }, [navigate]);
 
+  const clearHealthContext = useCallback(() => {
+    const next = new URLSearchParams(location.search);
+    next.delete("healthContext");
+    next.delete("date");
+    const query = next.toString();
+    navigate(`${location.pathname}${query ? `?${query}` : ""}`, { replace: true });
+  }, [location.pathname, location.search, navigate]);
+
   // Alternative asset actions hook (only used when isAltAsset && altHolding)
   const altAssetActions = useAlternativeAssetActions({
     holding: altHolding,
@@ -1015,6 +1127,16 @@ export const AssetProfilePage = () => {
           }
         />
         <PageContent>
+          <AssetHealthBanner
+            context={healthContext}
+            isManualPricingMode={isManualPricingMode}
+            date={healthDate}
+            canRefreshPrices={Boolean(profile?.id)}
+            isRefreshingPrices={syncMarketDataMutation.isPending}
+            onRefreshPrices={handleRefreshQuotesWithConfirm}
+            onClear={clearHealthContext}
+          />
+
           {fxActiveTab === "overview" && (
             <div className="space-y-4">
               <AssetHistoryCard
@@ -1281,6 +1403,16 @@ export const AssetProfilePage = () => {
         </div>
       </PageHeader>
       <PageContent>
+        <AssetHealthBanner
+          context={healthContext}
+          isManualPricingMode={isManualPricingMode}
+          date={healthDate}
+          canRefreshPrices={Boolean(profile?.id)}
+          isRefreshingPrices={syncMarketDataMutation.isPending}
+          onRefreshPrices={handleRefreshQuotesWithConfirm}
+          onClear={clearHealthContext}
+        />
+
         {/* Alternative Asset Content */}
         {isAltAsset && altHolding && assetProfile ? (
           isMobile ? (
