@@ -105,6 +105,13 @@ pub fn run_migrations(db_path: &str) -> Result<()> {
         }
     }
 
+    // Refresh query planner statistics after applying migrations.
+    if migration_result.is_ok() {
+        connection
+            .batch_execute("ANALYZE;")
+            .unwrap_or_else(|e| warn!("ANALYZE after migration failed: {}", e));
+    }
+
     // Flush WAL to main DB file before pool creation
     connection
         .batch_execute("PRAGMA wal_checkpoint(TRUNCATE);")
@@ -562,7 +569,10 @@ impl r2d2::CustomizeConnection<SqliteConnection, diesel::r2d2::Error> for Connec
         conn.batch_execute(
             "PRAGMA foreign_keys = ON;
              PRAGMA busy_timeout = 30000;
-             PRAGMA synchronous = NORMAL;",
+             PRAGMA synchronous = NORMAL;
+             PRAGMA cache_size = -65536;
+             PRAGMA mmap_size = 268435456;
+             PRAGMA temp_store = MEMORY;",
         )
         .map_err(diesel::r2d2::Error::QueryError)?;
 
