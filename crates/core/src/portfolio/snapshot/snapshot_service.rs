@@ -872,7 +872,11 @@ impl SnapshotService {
             }
 
             if effective_start_date <= calculation_end_date {
-                if let Some(snapshot) = initial_snapshot_for_acc {
+                if let Some(mut snapshot) = initial_snapshot_for_acc {
+                    // Seed lots come from the normalized `lots` table (source of
+                    // truth). Newly written snapshots omit embedded lots (STEP 2),
+                    // so carried positions would otherwise seed with zero lots.
+                    self.hydrate_seed_lots_from_table(&mut snapshot).await;
                     start_keyframes.insert(acc_id.clone(), snapshot);
                 } else {
                     let day_before_effective_start = effective_start_date
@@ -914,6 +918,80 @@ impl SnapshotService {
             effective_start_dates,
             overall_min_calc_date,
         ))
+    }
+
+    /// Hydrates a seed snapshot's per-position `lots` from the normalized
+    /// `lots` table (the source of truth) for positions whose embedded lots are
+    /// empty.
+    ///
+    /// Incremental (`IncrementalFromLast` / `SinceDate`) recalcs resume from a
+    /// persisted keyframe snapshot. Since STEP 2 (`#[serde(skip_serializing)]`
+    /// on `Position.lots`) newly written snapshots omit embedded lots, so
+    /// carried / out-of-window positions deserialize with zero lots. Replaying
+    /// from that empty seed and extracting lots would (a) trip the
+    /// `lots sum to 0` consistency check and (b) leave stale rows because
+    /// `sync_lots_for_account` preserves existing rows on empty input. Sourcing
+    /// the seed lots from the table keeps the in-memory recalc and the table
+    /// consistent.
+    ///
+    /// Positions that still carry embedded lots (pre-STEP-2 snapshots) are left
+    /// untouched. A `Full` recalc never reaches here — it seeds from a freshly
+    /// created empty snapshot and replays from inception. Repository absence or
+    /// error is non-fatal: the seed keeps its embedded lots and the recalc
+    /// proceeds as before.
+    async fn hydrate_seed_lots_from_table(&self, snapshot: &mut AccountStateSnapshot) {
+        let Some(lot_repository) = &self.lot_repository else {
+            return;
+        };
+
+        // Only hydrate when at least one position is missing its lots; avoids a
+        // query for fully-embedded (pre-STEP-2) seeds.
+        if !snapshot.positions.values().any(|p| p.lots.is_empty()) {
+            return;
+        }
+
+        let open_lots = match lot_repository
+            .get_open_lots_for_account(&snapshot.account_id)
+            .await
+        {
+            Ok(lots) => lots,
+            Err(e) => {
+                warn!(
+                    "Failed to hydrate seed lots from lots table for account {}: {}. \
+                     Proceeding with embedded snapshot lots.",
+                    snapshot.account_id, e
+                );
+                return;
+            }
+        };
+
+        if open_lots.is_empty() {
+            return;
+        }
+
+        // Group open lot rows by asset so each position is filled in one pass.
+        let mut lots_by_asset: HashMap<String, VecDeque<crate::portfolio::snapshot::Lot>> =
+            HashMap::new();
+        for record in open_lots {
+            let asset_id = record.asset_id.clone();
+            let position_id = snapshot
+                .positions
+                .get(&asset_id)
+                .map(|p| p.id.clone())
+                .unwrap_or_else(|| asset_id.clone());
+            lots_by_asset
+                .entry(asset_id)
+                .or_default()
+                .push_back(crate::lots::lot_record_to_snapshot_lot(&position_id, record));
+        }
+
+        for (asset_id, position) in snapshot.positions.iter_mut() {
+            if position.lots.is_empty() {
+                if let Some(lots) = lots_by_asset.remove(asset_id) {
+                    position.lots = lots;
+                }
+            }
+        }
     }
 
     fn first_split_date_in_range(

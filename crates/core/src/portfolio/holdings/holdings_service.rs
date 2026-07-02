@@ -14,7 +14,7 @@ use crate::portfolio::holdings::holdings_model::{Holding, HoldingType, Instrumen
 use crate::portfolio::snapshot::{self, SnapshotServiceTrait};
 use crate::utils::time_utils::{activity_date_in_tz, parse_user_timezone_or_default, user_today};
 use async_trait::async_trait;
-use chrono::{NaiveDate, Utc};
+use chrono::NaiveDate;
 use log::{debug, error, warn};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -1014,41 +1014,7 @@ fn parse_decimal_lossy(value: &str) -> Decimal {
 /// `None`. `position_id` is stamped from the owning position so the shape
 /// matches lots that were previously read from the embedded snapshot.
 fn lot_record_to_display_lot(position_id: &str, record: LotRecord) -> snapshot::Lot {
-    let acquisition_local_date = NaiveDate::parse_from_str(&record.open_date, "%Y-%m-%d").ok();
-    let acquisition_date = acquisition_local_date
-        .and_then(|date| date.and_hms_opt(0, 0, 0))
-        .map(|naive| naive.and_utc())
-        .unwrap_or_else(Utc::now);
-
-    let split_ratio = match record.split_ratio.parse::<Decimal>() {
-        Ok(ratio) if !ratio.is_zero() => ratio,
-        _ => Decimal::ONE,
-    };
-
-    let fees = parse_decimal_lossy(&record.fee_allocated);
-    let taxes = parse_decimal_lossy(&record.tax_allocated);
-
-    snapshot::Lot {
-        id: record.id,
-        position_id: position_id.to_string(),
-        acquisition_date,
-        acquisition_local_date,
-        quantity: parse_decimal_lossy(&record.remaining_quantity),
-        original_quantity: parse_decimal_lossy(&record.original_quantity),
-        cost_basis: parse_decimal_lossy(&record.remaining_cost_basis),
-        acquisition_price: parse_decimal_lossy(&record.cost_per_unit),
-        acquisition_fees: fees,
-        original_acquisition_fees: fees,
-        acquisition_taxes: taxes,
-        original_acquisition_taxes: taxes,
-        fx_rate_to_position: None,
-        fx_rate_to_account: None,
-        account_currency: None,
-        fx_rate_to_base: record.fx_rate_to_base.parse::<Decimal>().ok(),
-        base_currency: Some(record.base_currency),
-        source_activity_id: record.open_activity_id,
-        split_ratio,
-    }
+    crate::lots::lot_record_to_snapshot_lot(position_id, record)
 }
 
 fn add_monetary(acc: &mut MonetaryValue, other: &MonetaryValue) {

@@ -1041,6 +1041,176 @@ mod tests {
         }
     }
 
+    /// Lot repository that returns a fixed set of open lots from
+    /// `get_open_lots_for_account` (used to seed incremental-recalc hydration)
+    /// and records every lot handed to `sync_lots_for_account` so tests can
+    /// assert what the recalc extracted.
+    #[derive(Clone, Debug)]
+    struct SeededLotRepository {
+        open_lots: Arc<RwLock<Vec<LotRecord>>>,
+        synced_lots: Arc<RwLock<Vec<LotRecord>>>,
+    }
+
+    impl SeededLotRepository {
+        fn new(open_lots: Vec<LotRecord>) -> Self {
+            Self {
+                open_lots: Arc::new(RwLock::new(open_lots)),
+                synced_lots: Arc::new(RwLock::new(Vec::new())),
+            }
+        }
+
+        fn synced_lots(&self) -> Vec<LotRecord> {
+            self.synced_lots.read().unwrap().clone()
+        }
+
+        fn synced_qty_for_asset(&self, asset_id: &str) -> Decimal {
+            self.synced_lots()
+                .iter()
+                .filter(|record| record.asset_id == asset_id)
+                .map(|record| {
+                    let qty = record.remaining_quantity.parse::<Decimal>().unwrap_or_default();
+                    let ratio = record
+                        .split_ratio
+                        .parse::<Decimal>()
+                        .ok()
+                        .filter(|r| !r.is_zero())
+                        .unwrap_or(Decimal::ONE);
+                    qty * ratio
+                })
+                .sum()
+        }
+    }
+
+    #[async_trait]
+    impl LotRepositoryTrait for SeededLotRepository {
+        async fn replace_lots_for_account(
+            &self,
+            _account_id: &str,
+            _lots: &[LotRecord],
+        ) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn get_open_lots_for_account(&self, account_id: &str) -> AppResult<Vec<LotRecord>> {
+            Ok(self
+                .open_lots
+                .read()
+                .unwrap()
+                .iter()
+                .filter(|record| record.account_id == account_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn get_all_open_lots(&self) -> AppResult<Vec<LotRecord>> {
+            Ok(self.open_lots.read().unwrap().clone())
+        }
+
+        async fn get_lots_as_of_date(
+            &self,
+            _account_ids: &[String],
+            _date: NaiveDate,
+        ) -> AppResult<Vec<LotRecord>> {
+            Ok(Vec::new())
+        }
+
+        async fn get_all_lots_for_account(&self, _account_id: &str) -> AppResult<Vec<LotRecord>> {
+            Ok(Vec::new())
+        }
+
+        async fn get_lots_for_asset(&self, _asset_id: &str) -> AppResult<Vec<LotRecord>> {
+            Ok(Vec::new())
+        }
+
+        async fn get_asset_lot_view(
+            &self,
+            _asset_id: &str,
+            _include_snapshot_positions: bool,
+        ) -> AppResult<Vec<AssetLotView>> {
+            Ok(Vec::new())
+        }
+
+        async fn get_all_lots(&self) -> AppResult<Vec<LotRecord>> {
+            Ok(Vec::new())
+        }
+
+        async fn sync_lots_for_account(
+            &self,
+            _account_id: &str,
+            open_lots: &[LotRecord],
+            _closures: &[LotClosure],
+        ) -> AppResult<()> {
+            self.synced_lots
+                .write()
+                .unwrap()
+                .extend(open_lots.iter().cloned());
+            Ok(())
+        }
+
+        async fn get_open_position_quantities(&self) -> AppResult<HashMap<String, Decimal>> {
+            Ok(HashMap::new())
+        }
+
+        fn get_lot_disposals_for_accounts_in_date_range_sync(
+            &self,
+            _account_ids: &[String],
+            _start_date_exclusive: NaiveDate,
+            _end_date_inclusive: NaiveDate,
+        ) -> AppResult<Vec<LotDisposal>> {
+            Ok(Vec::new())
+        }
+
+        fn count_lots(&self) -> AppResult<i64> {
+            Ok(0)
+        }
+    }
+
+    /// Builds an open `LotRecord` for the given account/asset with a
+    /// remaining quantity and per-unit cost, mirroring what the storage layer
+    /// persists. Base FX defaults to 1 (base == lot currency).
+    #[allow(clippy::too_many_arguments)]
+    fn make_open_lot_record(
+        id: &str,
+        account_id: &str,
+        asset_id: &str,
+        open_date: &str,
+        remaining_quantity: Decimal,
+        cost_per_unit: Decimal,
+        currency: &str,
+        base_currency: &str,
+        fx_rate_to_base: Decimal,
+    ) -> LotRecord {
+        let cost_basis = cost_per_unit * remaining_quantity;
+        LotRecord {
+            id: id.to_string(),
+            account_id: account_id.to_string(),
+            asset_id: asset_id.to_string(),
+            open_date: open_date.to_string(),
+            open_activity_id: Some(format!("{id}-buy")),
+            original_quantity: remaining_quantity.to_string(),
+            remaining_quantity: remaining_quantity.to_string(),
+            cost_per_unit: cost_per_unit.to_string(),
+            original_cost_basis: cost_basis.to_string(),
+            remaining_cost_basis: cost_basis.to_string(),
+            original_cost_basis_base: (cost_basis * fx_rate_to_base).to_string(),
+            remaining_cost_basis_base: (cost_basis * fx_rate_to_base).to_string(),
+            fee_allocated: "0".to_string(),
+            fee_allocated_base: "0".to_string(),
+            tax_allocated: "0".to_string(),
+            tax_allocated_base: "0".to_string(),
+            currency: currency.to_string(),
+            base_currency: base_currency.to_string(),
+            fx_rate_to_base: fx_rate_to_base.to_string(),
+            cost_basis_method: "FIFO".to_string(),
+            split_ratio: "1".to_string(),
+            is_closed: false,
+            close_date: None,
+            close_activity_id: None,
+            created_at: Utc::now().to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+        }
+    }
+
     // Mock SnapshotRepository that implements the trait
     #[derive(Clone, Debug)]
     struct MockSnapshotRepository {
@@ -1534,6 +1704,284 @@ mod tests {
             !snapshot_repo.get_saved_snapshots().is_empty(),
             "snapshot write should happen before the dual-write error is surfaced"
         );
+    }
+
+    /// Builds a carried snapshot position with EMPTY embedded lots (as STEP 2
+    /// produces once `#[serde(skip_serializing)]` drops the `lots` array from
+    /// newly written snapshot JSON) but non-zero quantity and precomputed
+    /// cost-basis scalars.
+    fn carried_position_empty_lots(
+        account_id: &str,
+        asset_id: &str,
+        quantity: Decimal,
+        currency: &str,
+        total_cost_basis: Decimal,
+        cost_basis_account: Decimal,
+        cost_basis_base: Decimal,
+    ) -> Position {
+        Position {
+            id: format!("{account_id}-{asset_id}"),
+            account_id: account_id.to_string(),
+            asset_id: asset_id.to_string(),
+            quantity,
+            average_cost: if quantity.is_zero() {
+                Decimal::ZERO
+            } else {
+                total_cost_basis / quantity
+            },
+            total_cost_basis,
+            currency: currency.to_string(),
+            lots: VecDeque::new(),
+            cost_basis_account: Some(cost_basis_account),
+            cost_basis_base: Some(cost_basis_base),
+            ..Default::default()
+        }
+    }
+
+    /// STEP 2 makes the pre-existing "carried position seeds with zero lots"
+    /// bug universal: every incremental recalc seeds from a snapshot whose
+    /// embedded lots are empty. This test proves the fix — the recalc hydrates
+    /// each carried position's lots from the normalized `lots` table, so the
+    /// extracted lots sum to the position quantity (no `lots sum to 0`
+    /// mismatch) and the table receives a non-empty set (so the storage
+    /// orphan-cleanup guard runs instead of preserving stale rows). Includes a
+    /// carried, out-of-window (no activity in the replay window) asset.
+    #[tokio::test]
+    async fn test_incremental_recalc_hydrates_seed_lots_from_table() {
+        let base_currency_arc = Arc::new(RwLock::new("USD".to_string()));
+
+        let mut account_repo = MockAccountRepository::new();
+        let acc = create_test_account("acc1", "USD", "Carried Lots Account");
+        account_repo.add_account(acc.clone());
+        let account_repo = Arc::new(account_repo);
+
+        let today = valuation_date_today();
+        let seed_date = today.pred_opt().unwrap();
+        // One old activity (before the seed) so the account is processed in
+        // incremental mode. It sits outside the replay window, so both
+        // positions are carried purely from the hydrated seed.
+        let old_deposit_date = seed_date.pred_opt().unwrap();
+        let deposit = create_test_activity(
+            "dep1",
+            &acc.id,
+            Some("CASH:USD"),
+            "DEPOSIT",
+            old_deposit_date,
+            None,
+            None,
+            Some(dec!(10000)),
+            "USD",
+        );
+        let activity_repo = Arc::new(MockActivityRepositoryWithData::new(vec![deposit]));
+
+        let fx = Arc::new(MockFxService::new());
+        let asset_repo = Arc::new(MockAssetRepository::new());
+
+        // Seed keyframe: two carried positions, both with EMPTY embedded lots.
+        let mut seed = create_blank_snapshot(&acc.id, "USD", &seed_date.format("%Y-%m-%d").to_string());
+        seed.positions.insert(
+            "AAPL".to_string(),
+            carried_position_empty_lots(&acc.id, "AAPL", dec!(10), "USD", dec!(1000), dec!(1000), dec!(1000)),
+        );
+        // OLDCO: carried, out-of-window / inactive asset.
+        seed.positions.insert(
+            "OLDCO".to_string(),
+            carried_position_empty_lots(&acc.id, "OLDCO", dec!(5), "USD", dec!(100), dec!(100), dec!(100)),
+        );
+        let snapshot_repo = Arc::new(MockSnapshotRepository::new());
+        snapshot_repo.add_snapshots(vec![seed]);
+
+        let seed_date_str = seed_date.format("%Y-%m-%d").to_string();
+        let lot_repo = SeededLotRepository::new(vec![
+            make_open_lot_record("lot-aapl", &acc.id, "AAPL", &seed_date_str, dec!(10), dec!(100), "USD", "USD", dec!(1)),
+            make_open_lot_record("lot-oldco", &acc.id, "OLDCO", &seed_date_str, dec!(5), dec!(20), "USD", "USD", dec!(1)),
+        ]);
+        let lot_repo_assert = lot_repo.clone();
+
+        let svc = SnapshotService::new(
+            base_currency_arc,
+            account_repo,
+            activity_repo,
+            snapshot_repo.clone(),
+            asset_repo,
+            fx,
+        )
+        .with_lot_repository(Arc::new(lot_repo));
+
+        svc.recalculate_holdings_snapshots(None, SnapshotRecalcMode::IncrementalFromLast)
+            .await
+            .expect("incremental recalc should succeed");
+
+        // The recalc extracted lots for both carried positions and handed them
+        // to sync_lots_for_account. If hydration had failed, these would be
+        // empty (0), which is exactly the `lots sum to 0` mismatch condition.
+        assert_eq!(
+            lot_repo_assert.synced_qty_for_asset("AAPL"),
+            dec!(10),
+            "hydrated AAPL lots must sum to the carried position quantity"
+        );
+        assert_eq!(
+            lot_repo_assert.synced_qty_for_asset("OLDCO"),
+            dec!(5),
+            "hydrated out-of-window OLDCO lots must sum to the carried position quantity"
+        );
+        assert!(
+            !lot_repo_assert.synced_lots().is_empty(),
+            "sync must receive non-empty lots so the storage orphan-cleanup guard runs"
+        );
+    }
+
+    /// Directly exercises the seam the recalc relies on: a carried position
+    /// with empty embedded lots trips the `lots sum to 0` consistency check,
+    /// and hydrating that position from the table via
+    /// `lot_record_to_snapshot_lot` clears the mismatch while the extracted
+    /// lots sum to the position quantity.
+    #[test]
+    fn test_hydrated_seed_lots_pass_consistency_check() {
+        let mut position =
+            carried_position_empty_lots("acc1", "AAPL", dec!(10), "USD", dec!(1000), dec!(1000), dec!(1000));
+
+        let mut snapshot = AccountStateSnapshot {
+            id: "acc1_seed".to_string(),
+            account_id: "acc1".to_string(),
+            currency: "USD".to_string(),
+            ..Default::default()
+        };
+        snapshot
+            .positions
+            .insert("AAPL".to_string(), position.clone());
+
+        // Control: empty embedded lots reproduce the bug (one mismatch).
+        let empty_records = crate::lots::extract_lot_records(&snapshot);
+        assert!(empty_records.is_empty());
+        assert_eq!(
+            crate::lots::check_lot_quantity_consistency(&snapshot, &empty_records),
+            1,
+            "empty embedded lots must trip the lots-sum-to-0 consistency check"
+        );
+
+        // Hydrate from the table and re-check.
+        let record = make_open_lot_record(
+            "lot-aapl", "acc1", "AAPL", "2024-01-02", dec!(10), dec!(100), "USD", "USD", dec!(1),
+        );
+        position
+            .lots
+            .push_back(crate::lots::lot_record_to_snapshot_lot(&position.id, record));
+        snapshot.positions.insert("AAPL".to_string(), position);
+
+        let records = crate::lots::extract_lot_records(&snapshot);
+        assert_eq!(
+            crate::lots::check_lot_quantity_consistency(&snapshot, &records),
+            0,
+            "hydrated lots must satisfy the consistency check"
+        );
+        let extracted_sum: Decimal = records
+            .iter()
+            .map(|r| {
+                r.remaining_quantity.parse::<Decimal>().unwrap()
+                    * r.split_ratio.parse::<Decimal>().unwrap()
+            })
+            .sum();
+        assert_eq!(extracted_sum, dec!(10));
+    }
+
+    /// Cost-basis parity across an incremental recalc: seeding from a snapshot
+    /// whose lots are embedded (legacy) vs. empty-then-hydrated-from-the-table
+    /// (STEP 2) must yield the same carried valuation scalars in both the
+    /// account currency (EUR) and the base currency (USD). Hydration adds lot
+    /// detail without perturbing valuation.
+    #[tokio::test]
+    async fn test_incremental_recalc_cost_basis_parity_base_and_account() {
+        // account currency EUR, base USD, EUR->USD = 1.1. Run the same
+        // incremental recalc under two seedings and return the final carried
+        // AAPL position.
+        async fn run(embedded: bool) -> Position {
+            let base_currency_arc = Arc::new(RwLock::new("USD".to_string()));
+            let mut account_repo = MockAccountRepository::new();
+            let acc = create_test_account("acc1", "EUR", "Parity Account");
+            account_repo.add_account(acc.clone());
+            let account_repo = Arc::new(account_repo);
+
+            let today = valuation_date_today();
+            let seed_date = today.pred_opt().unwrap();
+            let old_deposit_date = seed_date.pred_opt().unwrap();
+            let seed_date_str = seed_date.format("%Y-%m-%d").to_string();
+
+            let deposit = create_test_activity(
+                "dep1", &acc.id, Some("CASH:EUR"), "DEPOSIT", old_deposit_date, None, None,
+                Some(dec!(10000)), "EUR",
+            );
+            let activity_repo = Arc::new(MockActivityRepositoryWithData::new(vec![deposit]));
+
+            let mut fx = MockFxService::new();
+            let mut d = old_deposit_date;
+            while d <= today {
+                fx.add_bidirectional_rate("EUR", "USD", d, dec!(1.1));
+                d = d.succ_opt().unwrap();
+            }
+            let fx = Arc::new(fx);
+            let asset_repo = Arc::new(MockAssetRepository::new());
+
+            let mut position = carried_position_empty_lots(
+                &acc.id, "AAPL", dec!(10), "EUR", dec!(1000), dec!(1000), dec!(1100),
+            );
+            if embedded {
+                // Legacy seed: embed the lot directly (pre-STEP-2). Hydration
+                // is skipped because embedded lots are present.
+                let record = make_open_lot_record(
+                    "lot-aapl", &acc.id, "AAPL", &seed_date_str, dec!(10), dec!(100), "EUR", "USD", dec!(1.1),
+                );
+                position
+                    .lots
+                    .push_back(crate::lots::lot_record_to_snapshot_lot(&position.id, record));
+            }
+            let mut seed = create_blank_snapshot(&acc.id, "EUR", &seed_date_str);
+            seed.positions.insert("AAPL".to_string(), position);
+            let snapshot_repo = Arc::new(MockSnapshotRepository::new());
+            snapshot_repo.add_snapshots(vec![seed]);
+
+            // Table always has the lot; hydration only fires when embedded is empty.
+            let lot_repo = SeededLotRepository::new(vec![make_open_lot_record(
+                "lot-aapl", &acc.id, "AAPL", &seed_date_str, dec!(10), dec!(100), "EUR", "USD", dec!(1.1),
+            )]);
+
+            let svc = SnapshotService::new(
+                base_currency_arc, account_repo, activity_repo, snapshot_repo.clone(), asset_repo, fx,
+            )
+            .with_lot_repository(Arc::new(lot_repo));
+
+            svc.recalculate_holdings_snapshots(None, SnapshotRecalcMode::IncrementalFromLast)
+                .await
+                .expect("recalc should succeed");
+
+            snapshot_repo
+                .get_saved_snapshots()
+                .into_iter()
+                .max_by_key(|s| s.snapshot_date)
+                .and_then(|s| s.positions.get("AAPL").cloned())
+                .expect("final snapshot must carry AAPL")
+        }
+
+        let embedded_pos = run(true).await;
+        let hydrated_pos = run(false).await;
+
+        assert_eq!(
+            hydrated_pos.total_cost_basis, embedded_pos.total_cost_basis,
+            "position-currency cost basis must match across embedded vs hydrated seeding"
+        );
+        assert_eq!(
+            hydrated_pos.cost_basis_account, embedded_pos.cost_basis_account,
+            "account-currency cost basis must match across embedded vs hydrated seeding"
+        );
+        assert_eq!(
+            hydrated_pos.cost_basis_base, embedded_pos.cost_basis_base,
+            "base-currency cost basis must match across embedded vs hydrated seeding"
+        );
+        // Sanity: the hydrated run actually carried the expected scalars.
+        assert_eq!(hydrated_pos.total_cost_basis, dec!(1000));
+        assert_eq!(hydrated_pos.cost_basis_account, Some(dec!(1000)));
+        assert_eq!(hydrated_pos.cost_basis_base, Some(dec!(1100)));
+        assert_eq!(hydrated_pos.quantity, dec!(10));
     }
 
     #[tokio::test]
