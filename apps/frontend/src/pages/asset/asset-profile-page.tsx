@@ -208,8 +208,7 @@ function AssetHealthBanner({
           }
         : {
             title: "Transactions need review",
-            description:
-              "Review the transactions Health Center flagged for this investment.",
+            description: "Review the transactions Health Center flagged for this investment.",
           };
 
   return (

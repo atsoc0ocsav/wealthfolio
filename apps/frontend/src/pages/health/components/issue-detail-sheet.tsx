@@ -189,7 +189,9 @@ function getPrimaryDiagnosticAction(diagnostic: HealthDiagnostic): DiagnosticAct
 }
 
 function isPriceDateDiagnostic(diagnostic: HealthDiagnostic): boolean {
-  return diagnostic.code === "MISSING_MARKET_QUOTE" || diagnostic.code === "MISSING_MANUAL_VALUATION";
+  return (
+    diagnostic.code === "MISSING_MARKET_QUOTE" || diagnostic.code === "MISSING_MANUAL_VALUATION"
+  );
 }
 
 function isDateEvidence(label: string): boolean {
@@ -285,10 +287,7 @@ function buildPriceAssetGroups(diagnostics: HealthDiagnostic[]): PriceDiagnostic
     const dateEvidence = diagnostic.evidence.find((row) => isDateEvidence(row.label));
     const label = assetEvidence?.value ?? diagnostic.entities[0]?.label ?? diagnostic.title;
     const route = assetEvidence?.route ?? diagnostic.entities[0]?.route;
-    const key =
-      diagnostic.entities.find((entity) => entity.kind === "asset")?.id ??
-      route ??
-      label;
+    const key = diagnostic.entities.find((entity) => entity.kind === "asset")?.id ?? route ?? label;
     const date = diagnostic.date ?? dateEvidence?.value;
     const existing = groups.get(key);
 
