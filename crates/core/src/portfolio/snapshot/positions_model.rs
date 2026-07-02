@@ -33,7 +33,17 @@ pub struct Position {
     /// The currency of the asset and the cost basis values (e.g., "USD", "EUR"). Set by the first acquisition activity.
     pub currency: String,
     pub inception_date: DateTime<Utc>,
-    #[serde(default)]
+    /// Open tax lots for this position.
+    ///
+    /// `#[serde(skip_serializing)]` stops newly written snapshot JSON from
+    /// embedding the lots (STEP 2 of the holdings_snapshots bloat fix). The
+    /// normalized `lots` table is the source of truth for lot detail; valuation
+    /// reads the precomputed `cost_basis_*` scalars instead of walking lots.
+    ///
+    /// `#[serde(default)]` is retained so (a) snapshots serialized before STEP 2
+    /// that still carry `lots` in their JSON keep deserializing their lots, and
+    /// (b) new snapshots (no `lots` key) deserialize `lots` as empty.
+    #[serde(default, skip_serializing)]
     pub lots: VecDeque<Lot>,
     pub created_at: DateTime<Utc>,
     pub last_updated: DateTime<Utc>,
@@ -1402,5 +1412,70 @@ mod tests {
         assert_eq!(position.quantity, dec!(-2));
         assert_eq!(position.total_cost_basis, dec!(-200));
         assert_eq!(position.average_cost, dec!(100));
+    }
+
+    #[test]
+    fn position_lots_are_skipped_on_serialize_but_still_deserialize_from_old_json() {
+        // A position carrying one open lot.
+        let mut position = test_position();
+        position
+            .add_lot_values(
+                "buy-1".to_string(),
+                dec!(10),
+                dec!(100),
+                dec!(1),
+                dec!(0),
+                Utc.with_ymd_and_hms(2025, 1, 2, 12, 0, 0).unwrap(),
+                None,
+                Some("buy-1".to_string()),
+                book_basis(),
+            )
+            .unwrap();
+        assert!(!position.lots.is_empty());
+
+        // STEP 2: serialized JSON must NOT embed the lots key.
+        let json = serde_json::to_string(&position).unwrap();
+        assert!(
+            !json.contains("\"lots\""),
+            "serialized position must omit the lots key, got: {json}"
+        );
+
+        // A newly-serialized position round-trips with empty lots
+        // (skip_serializing on write + serde default on read).
+        let reloaded: Position = serde_json::from_str(&json).unwrap();
+        assert!(reloaded.lots.is_empty());
+
+        // Backward compat: an OLD JSON string that DOES contain lots still
+        // populates them. skip_serializing only affects serialization; the
+        // retained #[serde(default)] leaves deserialization untouched.
+        let old_json = r#"{
+            "id": "POS-OPT-acc_1",
+            "accountId": "acc_1",
+            "assetId": "OPT",
+            "quantity": "10",
+            "averageCost": "100",
+            "totalCostBasis": "1000",
+            "currency": "USD",
+            "inceptionDate": "2025-01-02T12:00:00Z",
+            "lots": [
+                {
+                    "id": "buy-1",
+                    "positionId": "POS-OPT-acc_1",
+                    "acquisitionDate": "2025-01-02T12:00:00Z",
+                    "quantity": "10",
+                    "costBasis": "1000",
+                    "acquisitionPrice": "100",
+                    "acquisitionFees": "0",
+                    "fxRateToPosition": null
+                }
+            ],
+            "createdAt": "2025-01-02T12:00:00Z",
+            "lastUpdated": "2025-01-02T12:00:00Z"
+        }"#;
+        let old: Position = serde_json::from_str(old_json).unwrap();
+        assert_eq!(old.lots.len(), 1);
+        assert_eq!(old.lots[0].id, "buy-1");
+        assert_eq!(old.lots[0].quantity, dec!(10));
+        assert_eq!(old.lots[0].cost_basis, dec!(1000));
     }
 }

@@ -9,17 +9,17 @@ use crate::constants::DECIMAL_PRECISION;
 use crate::errors::{CalculatorError, Error as CoreError, Result};
 use crate::fx::currency::{get_normalization_rule, normalize_currency_code};
 use crate::fx::FxServiceTrait;
-use crate::lots::LotRepositoryTrait;
+use crate::lots::{LotRecord, LotRepositoryTrait};
 use crate::portfolio::holdings::holdings_model::{Holding, HoldingType, Instrument, MonetaryValue};
 use crate::portfolio::snapshot::{self, SnapshotServiceTrait};
 use crate::utils::time_utils::{activity_date_in_tz, parse_user_timezone_or_default, user_today};
 use async_trait::async_trait;
-use chrono::NaiveDate;
+use chrono::{NaiveDate, Utc};
 use log::{debug, error, warn};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, RwLock};
 
 use super::HoldingsValuationServiceTrait;
@@ -337,6 +337,21 @@ impl HoldingsService {
                 .map(|id| id == snapshot_pos.asset_id)
                 .unwrap_or(false);
 
+            // STEP 2: newly written snapshots no longer embed lots, so source
+            // the current open lots from the normalized `lots` table. Only
+            // fetch when this holding's lots were requested.
+            let lots = if include_lots {
+                self.open_display_lots(
+                    account_id,
+                    &snapshot_pos.asset_id,
+                    &snapshot_pos.id,
+                    &snapshot_pos.lots,
+                )
+                .await
+            } else {
+                None
+            };
+
             let holding_view = Holding {
                 id: format!("{}-{}-{}", id_prefix, account_id, snapshot_pos.asset_id),
                 account_id: account_id.to_string(),
@@ -345,7 +360,7 @@ impl HoldingsService {
                 asset_kind: Some(asset_info.kind.clone()),
                 quantity: snapshot_pos.quantity,
                 open_date: Some(snapshot_pos.inception_date),
-                lots: include_lots.then(|| snapshot_pos.lots.clone()),
+                lots,
                 contract_multiplier: snapshot_pos.contract_multiplier,
                 local_currency: snapshot_pos.currency.clone(),
                 base_currency: base_currency.to_string(),
@@ -446,6 +461,53 @@ impl HoldingsService {
         }
 
         holdings
+    }
+
+    /// Sources the current open lots for display from the normalized `lots`
+    /// table (STEP 2 of the holdings_snapshots bloat fix).
+    ///
+    /// Newly written snapshots no longer embed lots in their positions JSON, so
+    /// the lot detail shown on a holding must come from the `lots` table. When
+    /// the repository is wired and returns open lots, they are converted into
+    /// the display `Lot` shape the frontend expects. If the repository is
+    /// absent, errors, or returns no rows, this falls back to the snapshot's
+    /// embedded lots — non-empty only for snapshots serialized before STEP 2 —
+    /// preserving the prior behavior for not-yet-recalculated data.
+    async fn open_display_lots(
+        &self,
+        account_id: &str,
+        asset_id: &str,
+        position_id: &str,
+        embedded_lots: &VecDeque<snapshot::Lot>,
+    ) -> Option<VecDeque<snapshot::Lot>> {
+        if let Some(lot_repository) = &self.lot_repository {
+            match lot_repository
+                .get_open_lots_for_account_asset(account_id, asset_id)
+                .await
+            {
+                Ok(records) if !records.is_empty() => {
+                    return Some(
+                        records
+                            .into_iter()
+                            .map(|record| lot_record_to_display_lot(position_id, record))
+                            .collect(),
+                    );
+                }
+                Ok(_) => {
+                    // No open lots in the table: fall back to embedded lots
+                    // (present only on pre-STEP-2 snapshots; empty otherwise).
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to load open lots from lots table for account {} asset {}: {}. \
+                         Falling back to embedded snapshot lots.",
+                        account_id, asset_id, e
+                    );
+                }
+            }
+        }
+
+        Some(embedded_lots.clone())
     }
 
     async fn apply_historical_cost_basis_best_effort(
@@ -940,6 +1002,53 @@ fn convert_income_amount(
 
 fn parse_decimal_lossy(value: &str) -> Decimal {
     value.parse::<Decimal>().unwrap_or(Decimal::ZERO)
+}
+
+/// Converts a persisted [`LotRecord`] (normalized `lots` table row) into the
+/// in-memory display [`snapshot::Lot`] shape a `Holding` carries.
+///
+/// Only display-relevant fields are mapped: quantities and cost basis use the
+/// lot's *remaining* values (matching the open position), immutable
+/// acquisition-side values come from the record's allocated fee/tax, and the
+/// FX/audit fields that the table doesn't retain in the per-lot form are left
+/// `None`. `position_id` is stamped from the owning position so the shape
+/// matches lots that were previously read from the embedded snapshot.
+fn lot_record_to_display_lot(position_id: &str, record: LotRecord) -> snapshot::Lot {
+    let acquisition_local_date = NaiveDate::parse_from_str(&record.open_date, "%Y-%m-%d").ok();
+    let acquisition_date = acquisition_local_date
+        .and_then(|date| date.and_hms_opt(0, 0, 0))
+        .map(|naive| naive.and_utc())
+        .unwrap_or_else(Utc::now);
+
+    let split_ratio = match record.split_ratio.parse::<Decimal>() {
+        Ok(ratio) if !ratio.is_zero() => ratio,
+        _ => Decimal::ONE,
+    };
+
+    let fees = parse_decimal_lossy(&record.fee_allocated);
+    let taxes = parse_decimal_lossy(&record.tax_allocated);
+
+    snapshot::Lot {
+        id: record.id,
+        position_id: position_id.to_string(),
+        acquisition_date,
+        acquisition_local_date,
+        quantity: parse_decimal_lossy(&record.remaining_quantity),
+        original_quantity: parse_decimal_lossy(&record.original_quantity),
+        cost_basis: parse_decimal_lossy(&record.remaining_cost_basis),
+        acquisition_price: parse_decimal_lossy(&record.cost_per_unit),
+        acquisition_fees: fees,
+        original_acquisition_fees: fees,
+        acquisition_taxes: taxes,
+        original_acquisition_taxes: taxes,
+        fx_rate_to_position: None,
+        fx_rate_to_account: None,
+        account_currency: None,
+        fx_rate_to_base: record.fx_rate_to_base.parse::<Decimal>().ok(),
+        base_currency: Some(record.base_currency),
+        source_activity_id: record.open_activity_id,
+        split_ratio,
+    }
 }
 
 fn add_monetary(acc: &mut MonetaryValue, other: &MonetaryValue) {
@@ -3030,7 +3139,10 @@ mod tests {
             .expect("holding should exist");
 
         assert_eq!(open_lots_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(open_lots_for_asset_calls.load(Ordering::SeqCst), 1);
+        // Two asset-scoped fetches: one seeds historical base cost basis, and
+        // (STEP 2) one sources the display lots from the lots table. The
+        // account-wide accessor is never used for a single-asset holding view.
+        assert_eq!(open_lots_for_asset_calls.load(Ordering::SeqCst), 2);
         assert_eq!(holding.cost_basis.as_ref().unwrap().base, dec!(1000));
     }
 
@@ -3073,6 +3185,56 @@ mod tests {
         assert_eq!(holdings[0].cost_basis.as_ref().unwrap().base, Decimal::ZERO);
         assert_eq!(open_lots_calls.load(Ordering::SeqCst), 0);
         assert_eq!(open_lots_for_asset_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn get_holding_sources_display_lots_from_lots_table_when_snapshot_has_no_embedded_lots() {
+        let account_id = "acc-1";
+        let asset_id = "AAPL";
+
+        // STEP 2 shape: the snapshot position carries NO embedded lots.
+        let position = test_position(account_id, asset_id);
+        assert!(
+            position.lots.is_empty(),
+            "precondition: snapshot position must have no embedded lots"
+        );
+
+        let snapshot = AccountStateSnapshot {
+            account_id: account_id.to_string(),
+            currency: "USD".to_string(),
+            positions: HashMap::from([(asset_id.to_string(), position)]),
+            ..Default::default()
+        };
+
+        // The normalized lots table holds the current open lot.
+        let lot_repository = MockLotRepository::new(vec![test_lot_record(
+            account_id,
+            asset_id,
+            "USD",
+            dec!(100),
+        )]);
+        let service = test_service(
+            snapshot,
+            vec![test_asset(asset_id, "AAPL", InstrumentType::Equity)],
+            HashMap::from([(asset_id.to_string(), dec!(150))]),
+        )
+        .with_lot_repository(Arc::new(lot_repository));
+
+        let holding = service
+            .get_holding(account_id, asset_id, "USD")
+            .await
+            .unwrap()
+            .expect("holding should exist");
+
+        let lots = holding
+            .lots
+            .expect("display lots should be sourced from the lots table");
+        assert_eq!(lots.len(), 1);
+        assert_eq!(lots[0].id, format!("LOT-{asset_id}-USD"));
+        assert_eq!(lots[0].quantity, dec!(1));
+        assert_eq!(lots[0].cost_basis, dec!(100));
+        assert_eq!(lots[0].acquisition_price, dec!(100));
+        assert_eq!(lots[0].source_activity_id.as_deref(), Some("ACT-AAPL"));
     }
 
     #[test]
