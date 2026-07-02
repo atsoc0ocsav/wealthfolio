@@ -201,6 +201,8 @@ impl ManualSnapshotService {
                 last_updated: Utc::now(),
                 is_alternative: false,
                 contract_multiplier: Decimal::ONE,
+                cost_basis_account: None,
+                cost_basis_base: None,
             };
             positions.insert(asset.id, position);
         }

@@ -387,6 +387,8 @@ diesel::table! {
         contract_multiplier -> Text,
         created_at -> Text,
         last_updated -> Text,
+        cost_basis_base -> Nullable<Text>,
+        cost_basis_account -> Nullable<Text>,
     }
 }
 

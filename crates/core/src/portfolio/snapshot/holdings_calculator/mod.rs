@@ -411,6 +411,21 @@ impl HoldingsCalculator {
         }
         next_state.cost_basis = final_cost_basis_acct;
 
+        // Precompute per-position acquisition-FX cost basis in account and base
+        // currency so valuation can read a scalar instead of walking the
+        // embedded `lots`. This is additive parity groundwork: lots are still
+        // written unchanged, and the scalar mirrors valuation's per-lot
+        // conversion exactly (see `precompute_position_cost_basis`).
+        let base_currency = self.base_currency.read().unwrap().clone();
+        for position in next_state.positions.values_mut() {
+            let cost_basis_account =
+                self.precompute_position_cost_basis(position, &account_currency);
+            let cost_basis_base =
+                self.precompute_position_cost_basis(position, &base_currency);
+            position.cost_basis_account = cost_basis_account;
+            position.cost_basis_base = cost_basis_base;
+        }
+
         // Compute cash totals (once at end of day per spec)
         self.compute_cash_totals(&mut next_state, target_date);
 

@@ -45,6 +45,18 @@ pub struct Position {
     /// Defaults to 1 for non-derivative positions and for snapshots created before this field existed.
     #[serde(default = "default_multiplier")]
     pub contract_multiplier: Decimal,
+    /// Precomputed cost basis of all lots in the ACCOUNT currency, converted at
+    /// each lot's acquisition-date FX (stored lot rate preferred, else
+    /// acquisition-date market FX). Populated at snapshot write time so
+    /// valuation can read a scalar instead of walking `lots`. `None` for
+    /// snapshots serialized before this field existed and for positions with no
+    /// materialized lots; consumers fall back to walking `lots` in that case.
+    #[serde(default)]
+    pub cost_basis_account: Option<Decimal>,
+    /// Precomputed cost basis of all lots in the app BASE currency, converted at
+    /// each lot's acquisition-date FX. See [`Position::cost_basis_account`].
+    #[serde(default)]
+    pub cost_basis_base: Option<Decimal>,
 }
 
 fn default_multiplier() -> Decimal {
@@ -67,6 +79,8 @@ impl Default for Position {
             last_updated: Utc::now(),
             is_alternative: false,
             contract_multiplier: Decimal::ONE,
+            cost_basis_account: None,
+            cost_basis_base: None,
         }
     }
 }
@@ -346,6 +360,8 @@ impl Position {
             last_updated: date,
             is_alternative: false,
             contract_multiplier: Decimal::ONE,
+            cost_basis_account: None,
+            cost_basis_base: None,
         }
     }
 
@@ -372,6 +388,8 @@ impl Position {
             last_updated: date,
             is_alternative,
             contract_multiplier,
+            cost_basis_account: None,
+            cost_basis_base: None,
         }
     }
 

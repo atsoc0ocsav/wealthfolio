@@ -2,7 +2,7 @@
 
 use chrono::{NaiveDate, NaiveDateTime, Utc};
 use diesel::prelude::*;
-use diesel::sql_types::{Integer, Text};
+use diesel::sql_types::{Integer, Nullable, Text};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -156,6 +156,10 @@ pub struct SnapshotPositionRecord {
     pub created_at: String,
     #[diesel(sql_type = Text)]
     pub last_updated: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub cost_basis_base: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    pub cost_basis_account: Option<String>,
 }
 
 /// Insertable version without the autoincrement `id`.
@@ -173,6 +177,8 @@ pub struct NewSnapshotPositionRecord {
     pub contract_multiplier: String,
     pub created_at: String,
     pub last_updated: String,
+    pub cost_basis_base: Option<String>,
+    pub cost_basis_account: Option<String>,
 }
 
 impl SnapshotPositionRecord {
@@ -205,6 +211,14 @@ impl SnapshotPositionRecord {
             is_alternative: self.is_alternative != 0,
             contract_multiplier: Decimal::from_str(&self.contract_multiplier)
                 .unwrap_or(Decimal::ONE),
+            cost_basis_account: self
+                .cost_basis_account
+                .as_deref()
+                .and_then(|s| Decimal::from_str(s).ok()),
+            cost_basis_base: self
+                .cost_basis_base
+                .as_deref()
+                .and_then(|s| Decimal::from_str(s).ok()),
         }
     }
 }
@@ -224,6 +238,11 @@ impl NewSnapshotPositionRecord {
             contract_multiplier: pos.contract_multiplier.to_string(),
             created_at: pos.created_at.to_rfc3339(),
             last_updated: pos.last_updated.to_rfc3339(),
+            // Stored at full precision (no round_dp) so the precomputed scalar
+            // stays byte-identical to valuation's lot-walked cost basis when a
+            // future step reads it back in place of the embedded lots.
+            cost_basis_base: pos.cost_basis_base.map(|value| value.to_string()),
+            cost_basis_account: pos.cost_basis_account.map(|value| value.to_string()),
         }
     }
 }

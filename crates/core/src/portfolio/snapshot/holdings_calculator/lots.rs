@@ -7,6 +7,7 @@
 use super::economics::storage_money;
 use super::{HoldingsCalculator, ProjectionRun, SideEffectBuffer};
 use crate::activities::Activity;
+use crate::fx::currency::normalize_currency_code;
 use crate::lots::{LotClosure, LotDisposal};
 use crate::portfolio::snapshot::{FifoReductionResult, Position};
 use chrono::{NaiveDate, Utc};
@@ -227,6 +228,53 @@ impl HoldingsCalculator {
 }
 
 impl HoldingsCalculator {
+    /// Precompute a position's cost basis in `target_currency` at acquisition-date
+    /// FX, mirroring `valuation_calculator::calculate_cost_basis_in_currency`'s
+    /// per-lot logic **exactly** so the persisted scalar is byte-identical to the
+    /// value valuation derives by walking `lots`:
+    ///   * skip only zero-cost lots (not zero-quantity), matching valuation;
+    ///   * prefer the lot's stored acquisition FX (`stored_fx_rate_to`);
+    ///   * otherwise multiply by the acquisition-date market rate
+    ///     (`amount * get_exchange_rate_for_date`, identical to how valuation
+    ///     prefetches forward `(position_currency, target)` pairs and multiplies).
+    ///
+    /// Returns `None` when the position has no materialized lots (valuation keeps
+    /// its valuation-date-FX fallback for those) or when any acquisition-date FX
+    /// rate is unavailable (valuation then walks lots and surfaces the same
+    /// error), so the scalar is written only when it can be trusted.
+    pub(super) fn precompute_position_cost_basis(
+        &self,
+        position: &Position,
+        target_currency: &str,
+    ) -> Option<Decimal> {
+        if position.lots.is_empty() {
+            return None;
+        }
+
+        let position_currency = normalize_currency_code(&position.currency);
+        let target = normalize_currency_code(target_currency);
+        let mut total = Decimal::ZERO;
+
+        for lot in &position.lots {
+            if lot.cost_basis.is_zero() {
+                continue;
+            }
+            if let Some(rate) = lot.stored_fx_rate_to(&target) {
+                total += lot.cost_basis * rate;
+                continue;
+            }
+
+            let acquisition_date = lot.acquisition_date_key();
+            let rate = self
+                .fx_service
+                .get_exchange_rate_for_date(&position_currency, &target, acquisition_date)
+                .ok()?;
+            total += lot.cost_basis * rate;
+        }
+
+        Some(total)
+    }
+
     /// Book cost basis of a position in the account currency, anchored to each
     /// lot's acquisition-date FX (stored rate preferred). Falls back to the
     /// position aggregate when no lots are materialized.

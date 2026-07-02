@@ -261,13 +261,15 @@ mod tests {
         }
         fn get_exchange_rate_for_date(
             &self,
-            _from_currency: &str,
-            _to_currency: &str,
-            _date: NaiveDate,
+            from_currency: &str,
+            to_currency: &str,
+            date: NaiveDate,
         ) -> Result<Decimal> {
-            Err(crate::errors::Error::Unexpected(
-                "MockFxService::get_exchange_rate_for_date not implemented".to_string(),
-            ))
+            // Mirror the real FxService invariant: convert_currency_for_date =
+            // amount * get_exchange_rate_for_date. Return the per-unit rate from
+            // the same conversion map so precompute_position_cost_basis resolves
+            // the same value valuation would prefetch.
+            self.convert_currency_for_date(Decimal::ONE, from_currency, to_currency, date)
         }
         fn convert_currency(
             &self,
@@ -1025,6 +1027,8 @@ mod tests {
             last_updated: Utc::now(),
             is_alternative: false,
             contract_multiplier: Decimal::ONE,
+            cost_basis_account: None,
+            cost_basis_base: None,
         };
         previous_snapshot
             .positions
@@ -1137,6 +1141,8 @@ mod tests {
                 last_updated: Utc::now(),
                 is_alternative: false,
                 contract_multiplier: Decimal::ONE,
+                cost_basis_account: None,
+                cost_basis_base: None,
             },
         );
         previous_snapshot
@@ -4048,6 +4054,8 @@ mod tests {
             last_updated: Utc::now(),
             is_alternative: false,
             contract_multiplier: Decimal::ONE,
+            cost_basis_account: None,
+            cost_basis_base: None,
         };
         previous_snapshot
             .positions
@@ -5389,6 +5397,8 @@ mod tests {
                 last_updated: Utc::now(),
                 is_alternative: false,
                 contract_multiplier: Decimal::ONE,
+                cost_basis_account: None,
+                cost_basis_base: None,
             },
         );
 
@@ -8741,5 +8751,150 @@ mod tests {
             !result.snapshot.positions.contains_key("AAPL"),
             "no position should be created"
         );
+    }
+
+    /// STEP 1 parity (same currency): a multi-lot position that lives through a
+    /// split and a partial sell must have its precomputed cost-basis scalars
+    /// equal the sum of the remaining lots' cost basis (== total_cost_basis when
+    /// account == base == position currency). This exercises the FIFO + split +
+    /// partial-sell path that produces the lots the scalar is derived from.
+    #[test]
+    fn precomputed_cost_basis_same_currency_multilot_split_and_partial_sell() {
+        let base_currency = Arc::new(RwLock::new("USD".to_string()));
+        let mut calculator = create_calculator(Arc::new(MockFxService::new()), base_currency);
+
+        let mut snapshot = create_initial_snapshot("acc_1", "USD", "2023-01-01");
+
+        // Lot 1: 10 @ 100 = 1000
+        let buy1 = create_default_activity(
+            "buy1",
+            ActivityType::Buy,
+            "AAPL",
+            dec!(10),
+            dec!(100),
+            dec!(0),
+            "USD",
+            "2023-01-02",
+        );
+        snapshot = calculator
+            .calculate_next_holdings(&snapshot, &[buy1], NaiveDate::from_str("2023-01-02").unwrap())
+            .unwrap()
+            .snapshot;
+
+        // Lot 2: 10 @ 200 = 2000
+        let buy2 = create_default_activity(
+            "buy2",
+            ActivityType::Buy,
+            "AAPL",
+            dec!(10),
+            dec!(200),
+            dec!(0),
+            "USD",
+            "2023-01-03",
+        );
+        snapshot = calculator
+            .calculate_next_holdings(&snapshot, &[buy2], NaiveDate::from_str("2023-01-03").unwrap())
+            .unwrap()
+            .snapshot;
+
+        // 2:1 split on 2023-01-04 (both lots opened earlier are split).
+        let split = create_default_activity(
+            "split",
+            ActivityType::Split,
+            "AAPL",
+            dec!(2),
+            dec!(0),
+            dec!(0),
+            "USD",
+            "2023-01-04",
+        );
+        snapshot = calculator
+            .calculate_next_holdings(&snapshot, &[split], NaiveDate::from_str("2023-01-04").unwrap())
+            .unwrap()
+            .snapshot;
+
+        // Sell 10 effective shares (FIFO from lot 1, which is 20 effective after
+        // the split). Removes as-acquired 5 shares → 500 cost basis from lot 1.
+        let sell = create_default_activity(
+            "sell",
+            ActivityType::Sell,
+            "AAPL",
+            dec!(10),
+            dec!(250),
+            dec!(0),
+            "USD",
+            "2023-01-05",
+        );
+        snapshot = calculator
+            .calculate_next_holdings(&snapshot, &[sell], NaiveDate::from_str("2023-01-05").unwrap())
+            .unwrap()
+            .snapshot;
+
+        let position = snapshot.positions.get("AAPL").unwrap();
+        // Remaining: lot1 500 + lot2 2000 = 2500 (split-invariant cost basis).
+        assert_eq!(position.total_cost_basis, dec!(2500));
+        // Same currency everywhere → scalar equals the lot cost-basis sum.
+        assert_eq!(position.cost_basis_account, Some(dec!(2500)));
+        assert_eq!(position.cost_basis_base, Some(dec!(2500)));
+        assert_eq!(position.cost_basis_account, Some(position.total_cost_basis));
+    }
+
+    /// STEP 1 parity (cross currency): position in EUR, account in USD, base in
+    /// GBP, with two lots acquired on dates whose EUR->USD / EUR->GBP rates
+    /// differ. The precomputed scalars must use each lot's ACQUISITION-date FX
+    /// (summed per lot), not a single valuation-date rate applied to the total.
+    #[test]
+    fn precomputed_cost_basis_cross_currency_uses_per_lot_acquisition_fx() {
+        let mut fx = MockFxService::new();
+        let d1 = NaiveDate::from_str("2023-01-02").unwrap();
+        let d2 = NaiveDate::from_str("2023-01-03").unwrap();
+        // Acquisition-date rates differ between the two lots.
+        fx.add_bidirectional_rate("EUR", "USD", d1, dec!(1.10));
+        fx.add_bidirectional_rate("EUR", "GBP", d1, dec!(0.90));
+        fx.add_bidirectional_rate("EUR", "USD", d2, dec!(1.20));
+        fx.add_bidirectional_rate("EUR", "GBP", d2, dec!(0.95));
+
+        let base_currency = Arc::new(RwLock::new("GBP".to_string()));
+        let mut calculator = create_calculator(Arc::new(fx), base_currency);
+
+        // Account currency is USD; asset ADS.DE is listed in EUR.
+        let mut snapshot = create_initial_snapshot("acc_1", "USD", "2023-01-01");
+
+        // Lot 1: 10 @ 100 EUR = 1000 EUR on d1.
+        let buy1 = create_default_activity(
+            "buy1", ActivityType::Buy, "ADS.DE", dec!(10), dec!(100), dec!(0), "EUR", "2023-01-02",
+        );
+        snapshot = calculator
+            .calculate_next_holdings(&snapshot, &[buy1], d1)
+            .unwrap()
+            .snapshot;
+
+        // Lot 2: 5 @ 200 EUR = 1000 EUR on d2.
+        let buy2 = create_default_activity(
+            "buy2", ActivityType::Buy, "ADS.DE", dec!(5), dec!(200), dec!(0), "EUR", "2023-01-03",
+        );
+        snapshot = calculator
+            .calculate_next_holdings(&snapshot, &[buy2], d2)
+            .unwrap()
+            .snapshot;
+
+        let position = snapshot.positions.get("ADS.DE").unwrap();
+        assert_eq!(position.currency, "EUR");
+        assert_eq!(position.total_cost_basis, dec!(2000)); // EUR
+
+        // Account (USD): 1000*1.10 + 1000*1.20 = 2300.
+        assert_eq!(position.cost_basis_account, Some(dec!(2300)));
+        // Base (GBP): 1000*0.90 + 1000*0.95 = 1850.
+        assert_eq!(position.cost_basis_base, Some(dec!(1850)));
+
+        // Must NOT collapse to a single (e.g. latest) valuation-date rate.
+        assert_ne!(position.cost_basis_account, Some(dec!(2000) * dec!(1.20)));
+        assert_ne!(position.cost_basis_account, Some(dec!(2000) * dec!(1.10)));
+        assert_ne!(position.cost_basis_base, Some(dec!(2000) * dec!(0.95)));
+        assert_ne!(position.cost_basis_base, Some(dec!(2000) * dec!(0.90)));
+
+        // The account-currency scalar matches the snapshot's own account cost
+        // basis field (both anchored to acquisition-date FX).
+        assert_eq!(snapshot.cost_basis, dec!(2300));
     }
 }

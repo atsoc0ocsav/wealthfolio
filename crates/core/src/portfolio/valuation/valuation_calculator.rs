@@ -3,6 +3,7 @@ use crate::fx::currency::{normalize_amount, normalize_currency_code};
 use crate::fx::FxError;
 use crate::portfolio::economic_events::BasisStatus;
 use crate::portfolio::snapshot::AccountStateSnapshot;
+use crate::portfolio::snapshot::Position;
 use crate::portfolio::valuation::{DailyAccountValuation, ExternalFlowSource, ValuationStatus};
 use crate::quotes::Quote;
 
@@ -175,16 +176,30 @@ fn calculate_cost_basis_base(
         fx_rates_by_date,
         target_date,
         base_currency,
+        |position| position.cost_basis_base,
     )
 }
 
-fn calculate_cost_basis_in_currency(
+/// Computes the total cost basis of the snapshot's investment positions in
+/// `target_currency`, anchored to each lot's acquisition-date FX.
+///
+/// `precomputed` returns the per-position scalar persisted at snapshot write
+/// time (`Position::cost_basis_base` / `cost_basis_account`). When present it is
+/// used directly, making valuation independent of the embedded `lots`. Rows
+/// written before the scalar existed (or positions without materialized lots)
+/// return `None` and fall back to the original per-lot walk / valuation-date-FX
+/// path, so behavior is unchanged for not-yet-recalculated data.
+fn calculate_cost_basis_in_currency<F>(
     holdings_snapshot: &AccountStateSnapshot,
     fx_rates_today: &DailyFxRateMap,
     fx_rates_by_date: &HashMap<NaiveDate, DailyFxRateMap>,
     target_date: NaiveDate,
     target_currency: &str,
-) -> Result<Decimal> {
+    precomputed: F,
+) -> Result<Decimal>
+where
+    F: Fn(&Position) -> Option<Decimal>,
+{
     let mut total = Decimal::ZERO;
 
     for position in holdings_snapshot.positions.values() {
@@ -193,6 +208,14 @@ fn calculate_cost_basis_in_currency(
         }
 
         if position.total_cost_basis.is_zero() {
+            continue;
+        }
+
+        // Prefer the precomputed acquisition-FX scalar. It is byte-identical to
+        // the per-lot walk below (see holdings_calculator::precompute_position_cost_basis)
+        // and lets valuation avoid depending on the embedded lots.
+        if let Some(precomputed_basis) = precomputed(position) {
+            total += precomputed_basis;
             continue;
         }
 
@@ -251,6 +274,7 @@ fn calculate_cost_basis_acct(
         fx_rates_by_date,
         target_date,
         account_currency,
+        |position| position.cost_basis_account,
     )
 }
 
@@ -439,6 +463,8 @@ mod tests {
             last_updated: now,
             is_alternative: false,
             contract_multiplier: Decimal::ONE,
+            cost_basis_account: None,
+            cost_basis_base: None,
         }
     }
 
@@ -588,6 +614,8 @@ mod tests {
                 last_updated: Utc::now(),
                 is_alternative: false,
                 contract_multiplier: Decimal::ONE,
+                cost_basis_account: None,
+                cost_basis_base: None,
             },
         );
 
@@ -663,6 +691,8 @@ mod tests {
                 last_updated: now,
                 is_alternative: false,
                 contract_multiplier: Decimal::ONE,
+                cost_basis_account: None,
+                cost_basis_base: None,
             },
         );
         positions.insert(
@@ -681,6 +711,8 @@ mod tests {
                 last_updated: now,
                 is_alternative: true,
                 contract_multiplier: Decimal::ONE,
+                cost_basis_account: None,
+                cost_basis_base: None,
             },
         );
         let snapshot = AccountStateSnapshot {
@@ -791,6 +823,8 @@ mod tests {
                 last_updated: now,
                 is_alternative: false,
                 contract_multiplier: Decimal::ONE,
+                cost_basis_account: None,
+                cost_basis_base: None,
             },
         );
         let snapshot = AccountStateSnapshot {
@@ -890,6 +924,8 @@ mod tests {
                 last_updated: acquisition_date,
                 is_alternative: false,
                 contract_multiplier: Decimal::ONE,
+                cost_basis_account: None,
+                cost_basis_base: None,
             },
         );
 
@@ -998,6 +1034,8 @@ mod tests {
                     last_updated: acquisition_date,
                     is_alternative: false,
                     contract_multiplier: Decimal::ONE,
+                    cost_basis_account: None,
+                    cost_basis_base: None,
                 },
             )]),
             cash_balances: HashMap::new(),
@@ -1045,5 +1083,120 @@ mod tests {
         assert_eq!(result.investment_market_value, dec!(129.0300));
         assert_eq!(result.cost_basis, dec!(135.8600));
         assert_eq!(result.cost_basis_base, dec!(135.8600));
+    }
+
+    /// Builds a single-position snapshot (account = base = USD) holding one EUR
+    /// lot, used to prove the precomputed-scalar read path. The lot carries NO
+    /// stored FX rate, so any lot-walk requires acquisition-date rates from
+    /// `fx_rates_by_date`.
+    fn eur_lot_snapshot(
+        cost_basis_account: Option<Decimal>,
+        cost_basis_base: Option<Decimal>,
+    ) -> AccountStateSnapshot {
+        let acquisition_date = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let lot = Lot {
+            id: "lot-1".to_string(),
+            position_id: "POS-ETF-acc_1".to_string(),
+            acquisition_date,
+            acquisition_local_date: Some(NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()),
+            quantity: dec!(1),
+            original_quantity: dec!(1),
+            cost_basis: dec!(100),
+            acquisition_price: dec!(100),
+            acquisition_fees: Decimal::ZERO,
+            original_acquisition_fees: Decimal::ZERO,
+            acquisition_taxes: Decimal::ZERO,
+            original_acquisition_taxes: Decimal::ZERO,
+            fx_rate_to_position: None,
+            fx_rate_to_account: None,
+            account_currency: None,
+            fx_rate_to_base: None,
+            base_currency: None,
+            source_activity_id: Some("buy-1".to_string()),
+            split_ratio: Decimal::ONE,
+        };
+        let position = Position {
+            id: "POS-ETF-acc_1".to_string(),
+            account_id: "acc_1".to_string(),
+            asset_id: "ETF".to_string(),
+            quantity: dec!(1),
+            average_cost: dec!(100),
+            total_cost_basis: dec!(100),
+            currency: "EUR".to_string(),
+            inception_date: acquisition_date,
+            lots: VecDeque::from([lot]),
+            created_at: acquisition_date,
+            last_updated: acquisition_date,
+            is_alternative: false,
+            contract_multiplier: Decimal::ONE,
+            cost_basis_account,
+            cost_basis_base,
+        };
+        AccountStateSnapshot {
+            id: "acc_1_2024-06-04".to_string(),
+            account_id: "acc_1".to_string(),
+            snapshot_date: NaiveDate::from_ymd_opt(2024, 6, 4).unwrap(),
+            currency: "USD".to_string(),
+            positions: HashMap::from([("ETF".to_string(), position)]),
+            cash_balances: HashMap::new(),
+            cost_basis: dec!(100),
+            net_contribution: dec!(100),
+            net_contribution_base: dec!(100),
+            cash_total_account_currency: Decimal::ZERO,
+            cash_total_base_currency: Decimal::ZERO,
+            calculated_at: Utc::now().naive_utc(),
+            source: SnapshotSource::Calculated,
+        }
+    }
+
+    /// When the precomputed scalars are present, valuation reads them directly
+    /// and does NOT need to walk lots — proven here by passing empty
+    /// acquisition-date FX maps (a lot walk would fail). The account and base
+    /// outputs are wired to their respective fields (distinct values on purpose).
+    #[test]
+    fn cost_basis_reads_precomputed_scalar_without_walking_lots() {
+        let target_date = NaiveDate::from_ymd_opt(2024, 6, 4).unwrap();
+        let snapshot = eur_lot_snapshot(Some(dec!(150)), Some(dec!(175)));
+
+        // No quotes (position unpriced → no market FX needed); empty FX maps.
+        // account == base == USD so fx_rate_to_base resolves to 1 without a map.
+        let result = calculate_valuation(
+            &snapshot,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            target_date,
+            "USD",
+        )
+        .unwrap();
+
+        assert_eq!(result.cost_basis, dec!(150));
+        assert_eq!(result.cost_basis_base, dec!(175));
+    }
+
+    /// Sanity guard for the test above: without precomputed scalars AND without
+    /// acquisition-date FX rates, the lot-walk path cannot resolve the EUR->USD
+    /// conversion and valuation fails. This is what the precomputed scalar makes
+    /// valuation independent of.
+    #[test]
+    fn cost_basis_without_scalar_requires_acquisition_fx() {
+        let target_date = NaiveDate::from_ymd_opt(2024, 6, 4).unwrap();
+        let snapshot = eur_lot_snapshot(None, None);
+
+        let result = calculate_valuation(
+            &snapshot,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            target_date,
+            "USD",
+        );
+
+        assert!(
+            result.is_err(),
+            "lot walk must fail when acquisition FX is unavailable and no scalar exists"
+        );
     }
 }
