@@ -82,6 +82,30 @@ describe("asset profile calculations", () => {
     expect(displayQuote.currency).toBe("GBP");
   });
 
+  it("leaves already-major quote rows untouched in mixed quote-unit history", () => {
+    const factor = resolveQuoteDisplayFactor({
+      quote: quote({ close: 565, currency: "GBp" }),
+      displayCurrency: "GBP",
+      marketPrice: 5.65,
+    });
+
+    const [penceRow, poundRow] = normalizeQuoteHistoryForDisplay({
+      quoteHistory: [
+        quote({ close: 556.765, adjclose: 556.765, currency: "GBp" }),
+        quote({ close: 5.5, adjclose: 5.5, currency: "GBP" }),
+      ],
+      displayCurrency: "GBP",
+      quoteDisplayFactor: factor,
+    });
+
+    expect(penceRow.close).toBeCloseTo(5.56765);
+    expect(penceRow.currency).toBe("GBP");
+
+    // Already-GBP row must not be divided by 100.
+    expect(poundRow.close).toBeCloseTo(5.5);
+    expect(poundRow.currency).toBe("GBP");
+  });
+
   it("normalizes quote-unit income fallback amounts to display currency", () => {
     expect(
       sumDisplayIncomeActivities({

@@ -58,21 +58,26 @@ export function normalizeQuoteForDisplay({
 }): Quote {
   const normalizedQuoteCurrency = normalizeCurrency(quote.currency)?.toUpperCase();
   const normalizedDisplayCurrency = normalizeCurrency(displayCurrency)?.toUpperCase();
-  if (
-    quoteDisplayFactor == null ||
-    !Number.isFinite(quoteDisplayFactor) ||
-    normalizedQuoteCurrency !== normalizedDisplayCurrency
-  ) {
+  if (normalizedQuoteCurrency !== normalizedDisplayCurrency) {
+    return quote;
+  }
+
+  // Only rows still stored in a quote-unit currency (e.g. GBp) need the factor
+  // applied. Rows already stored in the major/display currency (e.g. GBP) are
+  // left untouched so a factor derived from a quote-unit latest quote does not
+  // divide already-normalized rows by 100.
+  const multiplier = getQuoteUnitCurrency(quote.currency) ? quoteDisplayFactor : 1;
+  if (multiplier == null || !Number.isFinite(multiplier)) {
     return quote;
   }
 
   return {
     ...quote,
-    open: quote.open * quoteDisplayFactor,
-    high: quote.high * quoteDisplayFactor,
-    low: quote.low * quoteDisplayFactor,
-    close: quote.close * quoteDisplayFactor,
-    adjclose: quote.adjclose * quoteDisplayFactor,
+    open: quote.open * multiplier,
+    high: quote.high * multiplier,
+    low: quote.low * multiplier,
+    close: quote.close * multiplier,
+    adjclose: quote.adjclose * multiplier,
     currency: displayCurrency,
   };
 }
