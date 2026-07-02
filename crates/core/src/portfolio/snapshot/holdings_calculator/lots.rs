@@ -7,7 +7,6 @@
 use super::economics::storage_money;
 use super::{HoldingsCalculator, ProjectionRun, SideEffectBuffer};
 use crate::activities::Activity;
-use crate::fx::currency::normalize_currency_code;
 use crate::lots::{LotClosure, LotDisposal};
 use crate::portfolio::snapshot::{FifoReductionResult, Position};
 use chrono::{NaiveDate, Utc};
@@ -247,32 +246,15 @@ impl HoldingsCalculator {
         position: &Position,
         target_currency: &str,
     ) -> Option<Decimal> {
-        if position.lots.is_empty() {
-            return None;
-        }
-
-        let position_currency = normalize_currency_code(&position.currency);
-        let target = normalize_currency_code(target_currency);
-        let mut total = Decimal::ZERO;
-
-        for lot in &position.lots {
-            if lot.cost_basis.is_zero() {
-                continue;
-            }
-            if let Some(rate) = lot.stored_fx_rate_to(&target) {
-                total += lot.cost_basis * rate;
-                continue;
-            }
-
-            let acquisition_date = lot.acquisition_date_key();
-            let rate = self
-                .fx_service
-                .get_exchange_rate_for_date(&position_currency, &target, acquisition_date)
-                .ok()?;
-            total += lot.cost_basis * rate;
-        }
-
-        Some(total)
+        crate::portfolio::snapshot::compute_position_cost_basis_from_lots(
+            position,
+            target_currency,
+            |from, to, acquisition_date| {
+                self.fx_service
+                    .get_exchange_rate_for_date(from, to, acquisition_date)
+                    .ok()
+            },
+        )
     }
 
     /// Book cost basis of a position in the account currency, anchored to each

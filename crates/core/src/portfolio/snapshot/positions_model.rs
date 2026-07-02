@@ -8,6 +8,7 @@ use std::default::Default;
 use crate::activities::Activity;
 
 use crate::constants::QUANTITY_THRESHOLD;
+use crate::fx::currency::normalize_currency_code;
 
 use crate::errors::{CalculatorError, Result};
 use crate::portfolio::economic_events::BasisStatus;
@@ -17,6 +18,66 @@ pub fn is_quantity_significant(quantity: &Decimal) -> bool {
     let threshold =
         Decimal::from_str_radix(QUANTITY_THRESHOLD, 10).unwrap_or_else(|_| Decimal::new(1, 8));
     quantity.abs() >= threshold
+}
+
+/// Sum a position's cost basis in `target_currency` from its materialized
+/// lots, anchoring each lot to its acquisition-date FX (stored lot rate
+/// preferred). `fx_fallback` supplies an acquisition-date market rate for a lot
+/// that has no stored rate to `target_currency`; returning `None` from it
+/// signals the rate is unavailable.
+///
+/// Mirrors `valuation_calculator::calculate_cost_basis_in_currency`'s per-lot
+/// logic **exactly** so the value is byte-identical to valuation's lot walk:
+///   * skip only zero-cost lots (not zero-quantity);
+///   * prefer the lot's stored acquisition FX (`Lot::stored_fx_rate_to`);
+///   * otherwise multiply by the fallback acquisition-date rate.
+///
+/// Returns `None` when the position has no materialized lots (valuation keeps
+/// its valuation-date-FX fallback for those) or when any required
+/// acquisition-date FX rate is unavailable, so a scalar is derived only when it
+/// can be trusted.
+///
+/// This is the single source of truth shared by two callers:
+///   * the write-time precompute
+///     ([`HoldingsCalculator::precompute_position_cost_basis`]), which passes a
+///     fallback backed by the FX service; and
+///   * the one-time startup backfill that strips embedded lots from legacy
+///     snapshots, which passes a fallback that always returns `None` and thus
+///     relies purely on the per-lot stored FX carried in the embedded lots.
+///
+/// Because both callers share this arithmetic, a backfilled scalar equals a
+/// write-time recompute / full rebuild for the same lots.
+pub fn compute_position_cost_basis_from_lots<F>(
+    position: &Position,
+    target_currency: &str,
+    mut fx_fallback: F,
+) -> Option<Decimal>
+where
+    F: FnMut(&str, &str, NaiveDate) -> Option<Decimal>,
+{
+    if position.lots.is_empty() {
+        return None;
+    }
+
+    let position_currency = normalize_currency_code(&position.currency);
+    let target = normalize_currency_code(target_currency);
+    let mut total = Decimal::ZERO;
+
+    for lot in &position.lots {
+        if lot.cost_basis.is_zero() {
+            continue;
+        }
+        if let Some(rate) = lot.stored_fx_rate_to(&target) {
+            total += lot.cost_basis * rate;
+            continue;
+        }
+
+        let acquisition_date = lot.acquisition_date_key();
+        let rate = fx_fallback(&position_currency, &target, acquisition_date)?;
+        total += lot.cost_basis * rate;
+    }
+
+    Some(total)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

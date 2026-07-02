@@ -29,6 +29,9 @@ pub type DbConnection = PooledConnection<ConnectionManager<SqliteConnection>>;
 pub mod write_actor;
 pub use write_actor::WriteHandle;
 
+pub mod strip_embedded_lots;
+pub use strip_embedded_lots::{strip_embedded_lots_migration, StripEmbeddedLotsOutcome};
+
 pub fn init(app_data_dir: &str) -> Result<String> {
     let db_path = get_db_path(app_data_dir);
 
@@ -356,10 +359,18 @@ pub fn create_backup_path(app_data_dir: &str) -> Result<String> {
 
 pub fn backup_database_to_file(app_data_dir: &str, backup_path: &str) -> Result<()> {
     let db_path = get_db_path(app_data_dir);
+    backup_database_from_path(&db_path, backup_path)
+}
 
+/// Create a self-contained `.db` backup of `source_db_path` at `backup_path`
+/// using SQLite's `VACUUM INTO`. This is the low-level backup primitive reused
+/// by both the app-data-dir entry point ([`backup_database_to_file`]) and the
+/// one-time startup migration that strips embedded lots (which backs up an
+/// explicit DB path before any destructive write).
+pub fn backup_database_from_path(source_db_path: &str, backup_path: &str) -> Result<()> {
     info!(
         "Creating database backup from {} to {}",
-        db_path, backup_path
+        source_db_path, backup_path
     );
 
     if let Some(parent) = Path::new(backup_path).parent() {
@@ -376,7 +387,7 @@ pub fn backup_database_to_file(app_data_dir: &str, backup_path: &str) -> Result<
         })?;
     }
 
-    let source_conn = RusqliteConnection::open(&db_path).map_err(|e| {
+    let source_conn = RusqliteConnection::open(source_db_path).map_err(|e| {
         error!("Failed to open source database for backup: {}", e);
         Error::Database(DatabaseError::BackupFailed(e.to_string()))
     })?;
