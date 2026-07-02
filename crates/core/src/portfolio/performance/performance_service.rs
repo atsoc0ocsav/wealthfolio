@@ -556,6 +556,12 @@ impl PerformanceService {
         let mut samples = Vec::new();
         let mut warnings = Vec::new();
         let mut not_applicable_reasons = Vec::new();
+        // Benign low-base/dormant-dust exclusions are tracked separately from
+        // `not_applicable_reasons`. A dormant gap (e.g. rounding dust that sits
+        // between a full withdrawal and a later refund) must pause TWR
+        // compounding without nulling the headline; only genuinely-fatal
+        // reasons belong in `not_applicable_reasons`.
+        let mut low_base_exclusions: Vec<String> = Vec::new();
         let mut chain_started = false;
         let mut warned_partial_value_coverage = false;
 
@@ -629,8 +635,8 @@ impl PerformanceService {
             let twr_denominator = prev_value + flow.inflow;
             if !chain_started && (prev_value <= Decimal::ZERO || twr_denominator < Decimal::ONE) {
                 if prev_value > Decimal::ZERO && twr_denominator < Decimal::ONE {
-                    not_applicable_reasons.push(format!(
-                        "TWR unavailable for {}: denominator {} is below 1 base currency unit before the return chain starts.",
+                    low_base_exclusions.push(format!(
+                        "TWR compounding paused for {}: denominator {} is below 1 base currency unit before the return chain starts.",
                         curr_point.valuation_date, twr_denominator
                     ));
                 }
@@ -648,11 +654,11 @@ impl PerformanceService {
             let excluded_from_compounding = twr_denominator < Decimal::ONE;
             let twr = if excluded_from_compounding {
                 let reason = format!(
-                    "TWR unavailable for {}: denominator {} is below 1 base currency unit.",
+                    "TWR compounding paused for {}: denominator {} is below 1 base currency unit; treated as a dormant/dust day.",
                     curr_point.valuation_date, twr_denominator
                 );
-                warn!("{}", reason);
-                not_applicable_reasons.push(reason);
+                debug!("{}", reason);
+                low_base_exclusions.push(reason);
                 Decimal::ZERO
             } else {
                 let numerator = curr_value + flow.outflow - prev_value - flow.inflow;
@@ -677,8 +683,18 @@ impl PerformanceService {
             );
             None
         } else if !not_applicable_reasons.is_empty() {
+            // Only genuinely-fatal reasons (unknown external flow, unavailable
+            // valuation coverage, negative value) reach `not_applicable_reasons`.
+            // Benign low-base/dormant exclusions live in `low_base_exclusions`
+            // and must not null the headline TWR.
             None
         } else {
+            if !low_base_exclusions.is_empty() {
+                debug!(
+                    "TWR compounding paused across {} low-base/dormant day(s); headline computed from the compounded active sub-periods.",
+                    low_base_exclusions.len()
+                );
+            }
             Some(cumulative_twr_factor - Decimal::ONE)
         };
 
@@ -8659,7 +8675,7 @@ mod tests {
     }
 
     #[test]
-    fn twr_tiny_denominator_before_chain_makes_result_not_applicable() {
+    fn twr_tiny_denominator_before_chain_pauses_without_nulling_headline() {
         let mut history = vec![
             valuation(
                 "2026-05-01",
@@ -8687,12 +8703,114 @@ mod tests {
         )
         .expect("performance should compute");
 
-        assert!(result.returns.twr.is_none());
-        assert!(result
+        // Option B: a sub-1 denominator before the chain starts is benign. The
+        // chain starts on 2026-05-03 (denominator 0.5 + 1.5 = 2 >= 1) with a
+        // zero-move, so the headline is Some(0), not None, and the benign
+        // exclusion never appears in not_applicable_reasons.
+        assert_eq!(result.returns.twr.unwrap(), Decimal::ZERO);
+        assert!(!result
             .data_quality
             .not_applicable_reasons
             .iter()
             .any(|reason| reason.contains("below 1 base currency unit")));
+    }
+
+    #[test]
+    fn twr_dormant_dust_gap_pauses_but_does_not_null_headline() {
+        // Timeline: funded from zero, grows +10%, fully transferred out leaving
+        // rounding dust (~0.0027), sits dormant for several days, then refunded
+        // and grows +25%. The dormant dust days have a sub-1 denominator and are
+        // excluded from compounding, but under Option B they must only PAUSE the
+        // chain — the headline TWR should compound the two active sub-periods:
+        // (1 + 0.10) * (1 + 0.25) - 1 = 0.375.
+        let mut history = vec![
+            // Zero start.
+            valuation(
+                "2026-05-01",
+                Decimal::ZERO,
+                Decimal::ZERO,
+                Decimal::ZERO,
+                Decimal::ZERO,
+            ),
+            // Funded with 100.
+            valuation("2026-05-02", dec!(100), dec!(100), Decimal::ZERO, Decimal::ZERO),
+            // Grows +10% (quiet day).
+            valuation("2026-05-03", dec!(110), dec!(100), Decimal::ZERO, Decimal::ZERO),
+            // Fully transferred out, leaving 0.0027 dust (zero-move boundary:
+            // 0.0027 + 109.9973 - 110 - 0 = 0).
+            valuation(
+                "2026-05-04",
+                dec!(0.0027),
+                dec!(-9.9973),
+                Decimal::ZERO,
+                Decimal::ZERO,
+            ),
+            // Dormant dust days (denominator 0.0027 < 1 -> excluded/paused).
+            valuation(
+                "2026-05-05",
+                dec!(0.0027),
+                dec!(-9.9973),
+                Decimal::ZERO,
+                Decimal::ZERO,
+            ),
+            valuation(
+                "2026-05-06",
+                dec!(0.0027),
+                dec!(-9.9973),
+                Decimal::ZERO,
+                Decimal::ZERO,
+            ),
+            valuation(
+                "2026-05-07",
+                dec!(0.0027),
+                dec!(-9.9973),
+                Decimal::ZERO,
+                Decimal::ZERO,
+            ),
+            // Refunded with 200 (zero-move boundary:
+            // 200.0027 - 0.0027 - 200 = 0).
+            valuation(
+                "2026-06-01",
+                dec!(200.0027),
+                dec!(190.0027),
+                Decimal::ZERO,
+                Decimal::ZERO,
+            ),
+            // Grows +25% (quiet day): 50.000675 / 200.0027 = 0.25.
+            valuation(
+                "2026-06-02",
+                dec!(250.003375),
+                dec!(190.0027),
+                Decimal::ZERO,
+                Decimal::ZERO,
+            ),
+        ];
+        history[1].external_inflow_base = dec!(100);
+        history[1].external_flow_source = ExternalFlowSource::CashAmount;
+        history[3].external_outflow_base = dec!(109.9973);
+        history[3].external_flow_source = ExternalFlowSource::CashAmount;
+        history[7].external_inflow_base = dec!(200);
+        history[7].external_flow_source = ExternalFlowSource::CashAmount;
+
+        let result = PerformanceService::compute_account_performance(
+            &history,
+            Some(TrackingMode::Transactions),
+            None,
+            true,
+        )
+        .expect("performance should compute");
+
+        // Headline is present and equals the compounded active sub-periods.
+        assert!(result.returns.twr.is_some());
+        assert_eq!(result.returns.twr.unwrap().round_dp(4), dec!(0.375));
+        // The dormant dust days did not poison the headline.
+        assert!(!result
+            .data_quality
+            .not_applicable_reasons
+            .iter()
+            .any(|reason| reason.contains("below 1 base currency unit")));
+        // Chart output still renders the cumulative series to the same value.
+        assert_eq!(result.series.last().unwrap().value.round_dp(4), dec!(0.375));
     }
 
     #[test]
