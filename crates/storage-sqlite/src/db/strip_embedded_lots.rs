@@ -26,14 +26,26 @@
 //! 5. **Vacuum** — once, after the backfill+strip transaction commits, and only
 //!    when at least one snapshot was migrated, to reclaim the freed space.
 //!
-//! The backfill relies purely on the per-lot stored FX carried in the embedded
-//! lots (`fxRateToBase` / `fxRateToAccount`) plus same-currency identity, so no
-//! external market-data / FX lookup is required. Because both this backfill and
-//! write-time precompute share [`compute_position_cost_basis_from_lots`], a
-//! backfilled scalar is identical to a write-time recompute / full rebuild.
+//! The backfill converts each embedded lot at its acquisition-date FX using
+//! the per-lot stored FX carried in the lots (`fxRateToBase` / `fxRateToAccount`)
+//! first, and — when a very old lot lacks a stored rate — an **offline** FX
+//! fallback that resolves the acquisition-date rate from the LOCAL stored rate
+//! data (the `quotes` table for `kind='FX'` assets) via the same
+//! [`FxService`]/[`compute_position_cost_basis_from_lots`] path write-time
+//! precompute uses. No network access is ever performed. Because both this
+//! backfill and write-time precompute share [`compute_position_cost_basis_from_lots`]
+//! **and** the same local FX rate source/semantics (normalization, inversion,
+//! nearest-date via the currency converter), a backfilled scalar is identical to
+//! a write-time recompute / full rebuild. If a rate genuinely cannot be resolved
+//! locally, the scalar is left `NULL` (never fabricated), matching prior
+//! behavior.
+//!
+//! [`FxService`]: wealthfolio_core::fx::FxService
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use chrono::NaiveDate;
 use diesel::connection::SimpleConnection;
 use diesel::prelude::*;
 use diesel::sql_query;
@@ -42,10 +54,12 @@ use log::{info, warn};
 use rust_decimal::Decimal;
 
 use wealthfolio_core::errors::{DatabaseError, Error, Result};
+use wealthfolio_core::fx::{FxService, FxServiceTrait};
 use wealthfolio_core::portfolio::snapshot::{compute_position_cost_basis_from_lots, Position};
 
-use super::{backup_database_from_path, create_backup_path, get_connection, DbPool};
+use super::{backup_database_from_path, create_backup_path, get_connection, DbPool, WriteHandle};
 use crate::errors::StorageError;
+use crate::fx::FxRepository;
 
 /// LIKE pattern matching a `positions` JSON blob that still embeds at least one
 /// lot object (`"lots":[{`). STEP-2 writes omit the `lots` key entirely, and a
@@ -153,6 +167,15 @@ pub fn strip_embedded_lots_migration(
 
     // 3) BACKFILL (compute) — done fully offline before touching the DB.
     let base_currency = fetch_base_currency(&mut conn)?;
+    // Offline FX resolver over the SAME local rate source write-time precompute
+    // uses: core's `FxService` backed by the storage-sqlite `FxRepository`
+    // reading the local `quotes`/`assets` (kind='FX') tables. `initialize()`
+    // builds the in-memory currency converter from the local historical rates,
+    // so acquisition-date resolution uses identical normalization, inversion,
+    // and nearest-date semantics as `HoldingsCalculator::precompute_position_cost_basis`.
+    // `None` when the FX subsystem cannot be brought up (then only same-currency
+    // identity is derivable, exactly as before this hardening).
+    let fx_service = build_offline_fx_service(pool);
     let mut account_currencies: HashMap<String, String> = HashMap::new();
     let mut plans: Vec<SnapshotPlan> = Vec::with_capacity(candidates.len());
 
@@ -189,21 +212,24 @@ pub fn strip_embedded_lots_migration(
             }
             stripped_any = true;
 
-            // Offline fallback: only same-currency identity (rate = 1) is
-            // derivable without market data. Cross-currency lots must carry
-            // their stored acquisition FX (`fxRateToBase` / `fxRateToAccount`);
-            // when they do, `Lot::stored_fx_rate_to` resolves them and this
-            // fallback is never reached. This mirrors write-time precompute
-            // exactly (which uses the FX service for the same fallback and
-            // returns 1.0 for identity conversions).
-            let identity_fx = |from: &str, to: &str, _date: chrono::NaiveDate| {
-                (from == to).then_some(Decimal::ONE)
-            };
-
-            let cost_basis_account =
-                compute_position_cost_basis_from_lots(pos, &account_currency, identity_fx);
-            let cost_basis_base =
-                compute_position_cost_basis_from_lots(pos, &base_currency, identity_fx);
+            // Fallback for lots that lack stored per-lot FX: same-currency
+            // identity first, else resolve the acquisition-date rate from the
+            // LOCAL stored FX data via `fx_service` (offline, no network). Lots
+            // that DO carry stored FX never reach this fallback —
+            // `Lot::stored_fx_rate_to` resolves them inside
+            // `compute_position_cost_basis_from_lots`, the shared arithmetic
+            // with write-time precompute. When the rate cannot be resolved
+            // locally the helper yields `None`, leaving the scalar `NULL`.
+            let cost_basis_account = compute_position_cost_basis_from_lots(
+                pos,
+                &account_currency,
+                |from, to, date| resolve_fx_fallback(fx_service.as_ref(), from, to, date),
+            );
+            let cost_basis_base = compute_position_cost_basis_from_lots(
+                pos,
+                &base_currency,
+                |from, to, date| resolve_fx_fallback(fx_service.as_ref(), from, to, date),
+            );
 
             // Mirror the scalars into the Position so the stripped JSON matches
             // the STEP-2 write shape and the JSON-fallback read path stays
@@ -339,6 +365,58 @@ fn fetch_account_currency(conn: &mut SqliteConnection, account_id: &str) -> Resu
         .load(conn)
         .map_err(StorageError::from)?;
     Ok(rows.into_iter().next().map(|row| row.value).unwrap_or_default())
+}
+
+/// Build an **offline** [`FxService`] over `pool`, backed by the storage-sqlite
+/// [`FxRepository`] reading the local `quotes`/`assets` (kind='FX') tables — the
+/// exact same rate source write-time precompute reads. `initialize()` loads all
+/// local historical rates into the in-memory currency converter so subsequent
+/// acquisition-date lookups use identical normalization / inversion /
+/// nearest-date semantics.
+///
+/// The repository is constructed with a [`WriteHandle::detached`] because this
+/// resolver only ever performs reads (`get_historical_exchange_rates`,
+/// `get_latest_exchange_rate*`); no writer actor / Tokio runtime is required, so
+/// this is safe from the synchronous startup migration and its tests.
+///
+/// Returns `None` (and logs) if the converter cannot be initialized, in which
+/// case the backfill falls back to same-currency identity only — the exact
+/// behavior prior to this hardening, so no scalar is ever fabricated.
+fn build_offline_fx_service(pool: &DbPool) -> Option<FxService> {
+    let repository = Arc::new(FxRepository::new(Arc::new(pool.clone()), WriteHandle::detached()));
+    let service = FxService::new(repository);
+    match service.initialize() {
+        Ok(()) => Some(service),
+        Err(e) => {
+            warn!(
+                "holdings_snapshots lot-strip migration: offline FX resolver unavailable ({}); \
+                 falling back to same-currency identity only for lots lacking stored FX.",
+                e
+            );
+            None
+        }
+    }
+}
+
+/// Acquisition-date FX fallback for a lot with no stored per-lot rate. Mirrors
+/// write-time precompute's fallback: same-currency identity (`1`), otherwise the
+/// local stored rate for `(from, to)` at `date` resolved by `fx_service`
+/// (offline). Returns `None` when the rate cannot be resolved locally, leaving
+/// the scalar `NULL` rather than guessing.
+///
+/// `from`/`to` arrive already normalized from
+/// [`compute_position_cost_basis_from_lots`]; `FxService::get_exchange_rate_for_date`
+/// normalizes idempotently, so the resolved value matches precompute exactly.
+fn resolve_fx_fallback(
+    fx_service: Option<&FxService>,
+    from: &str,
+    to: &str,
+    date: NaiveDate,
+) -> Option<Decimal> {
+    if from == to {
+        return Some(Decimal::ONE);
+    }
+    fx_service.and_then(|svc| svc.get_exchange_rate_for_date(from, to, date).ok())
 }
 
 #[cfg(test)]
@@ -627,5 +705,188 @@ mod tests {
             "SELECT COALESCE(cost_basis_base, '__NULL__') AS value FROM snapshot_positions WHERE snapshot_id = 'snap1' AND asset_id = 'EUSTX'",
         );
         assert!(base.is_none(), "cost_basis_base must remain NULL after abort");
+    }
+
+    /// Insert a non-FX INVESTMENT asset (so positions can reference it).
+    fn seed_asset(pool: &DbPool, id: &str, quote_ccy: &str) {
+        exec(
+            pool,
+            &format!(
+                "INSERT INTO assets (id, kind, name, display_code, notes, metadata, is_active, quote_mode, quote_ccy, instrument_type, instrument_symbol, instrument_exchange_mic, provider_config, created_at, updated_at) \
+                 VALUES ('{id}', 'INVESTMENT', '{id}', '{id}', NULL, NULL, 1, 'MANUAL', '{quote_ccy}', NULL, NULL, NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ),
+        );
+    }
+
+    /// Populate the LOCAL FX rate table (an `assets` row of kind='FX' plus a
+    /// `quotes` row) for `from`->`to` on `day`, exactly as market-data sync
+    /// would. This is the same source `FxService`/precompute read from.
+    fn seed_fx_rate(pool: &DbPool, from: &str, to: &str, day: &str, rate: &str) {
+        let asset_id = format!("FX-{from}{to}");
+        // `instrument_key` is a STORED generated column
+        // (`instrument_type||':'||instrument_symbol||'/'||quote_ccy` for FX), so
+        // it is derived from the columns below and must not be inserted directly.
+        exec(
+            pool,
+            &format!(
+                "INSERT OR IGNORE INTO assets (id, kind, name, display_code, notes, metadata, is_active, quote_mode, quote_ccy, instrument_type, instrument_symbol, instrument_exchange_mic, provider_config, created_at, updated_at) \
+                 VALUES ('{asset_id}', 'FX', '{from}/{to}', '{from}{to}', NULL, NULL, 1, 'MANUAL', '{to}', 'FX', '{from}', NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ),
+        );
+        exec(
+            pool,
+            &format!(
+                "INSERT INTO quotes (id, asset_id, day, source, open, high, low, close, adjclose, volume, currency, notes, created_at, timestamp) \
+                 VALUES ('{asset_id}_{day}_MANUAL', '{asset_id}', '{day}', 'MANUAL', '{rate}', '{rate}', '{rate}', '{rate}', '{rate}', '0', '{from}', NULL, '{day}T12:00:00Z', '{day}T12:00:00Z')"
+            ),
+        );
+    }
+
+    /// Snapshot embedding three positions: (1) cross-currency EUR with lots
+    /// that LACK stored FX, (2) same-currency USD control, (3) cross-currency
+    /// EUR with stored per-lot FX. All `snapshot_positions` scalars start NULL.
+    fn seed_localfx_snapshot(pool: &DbPool) {
+        let positions = concat!(
+            r#"{"#,
+            // (1) EUR, NO stored FX -> must resolve via local FX table.
+            r#""EUSTX":{"id":"POS-EUSTX-acc1","accountId":"acc1","assetId":"EUSTX","#,
+            r#""quantity":"15","averageCost":"100","totalCostBasis":"1500","#,
+            r#""currency":"EUR","inceptionDate":"2025-01-02T12:00:00Z","lots":[{"#,
+            r#""id":"eu-buy-1","positionId":"POS-EUSTX-acc1","acquisitionDate":"2025-01-02T12:00:00Z","#,
+            r#""quantity":"10","costBasis":"1000","acquisitionPrice":"100","acquisitionFees":"0","#,
+            r#""fxRateToPosition":null,"fxRateToAccount":null,"accountCurrency":null,"#,
+            r#""fxRateToBase":null,"baseCurrency":null},{"#,
+            r#""id":"eu-buy-2","positionId":"POS-EUSTX-acc1","acquisitionDate":"2025-03-02T12:00:00Z","#,
+            r#""quantity":"5","costBasis":"500","acquisitionPrice":"100","acquisitionFees":"0","#,
+            r#""fxRateToPosition":null,"fxRateToAccount":null,"accountCurrency":null,"#,
+            r#""fxRateToBase":null,"baseCurrency":null}],"#,
+            r#""createdAt":"2025-01-02T12:00:00Z","lastUpdated":"2025-03-02T12:00:00Z"},"#,
+            // (2) USD, identity control (no stored FX needed).
+            r#""USTX":{"id":"POS-USTX-acc1","accountId":"acc1","assetId":"USTX","#,
+            r#""quantity":"10","averageCost":"100","totalCostBasis":"1000","#,
+            r#""currency":"USD","inceptionDate":"2025-01-02T12:00:00Z","lots":[{"#,
+            r#""id":"us-buy-1","positionId":"POS-USTX-acc1","acquisitionDate":"2025-01-02T12:00:00Z","#,
+            r#""quantity":"10","costBasis":"1000","acquisitionPrice":"100","acquisitionFees":"0","#,
+            r#""fxRateToPosition":null,"fxRateToAccount":null,"accountCurrency":null,"#,
+            r#""fxRateToBase":null,"baseCurrency":null}],"#,
+            r#""createdAt":"2025-01-02T12:00:00Z","lastUpdated":"2025-01-02T12:00:00Z"},"#,
+            // (3) EUR WITH stored per-lot FX (1.4) — must be used verbatim,
+            // NOT the local FX table (which would yield 1.05 on this date).
+            r#""EUSTX2":{"id":"POS-EUSTX2-acc1","accountId":"acc1","assetId":"EUSTX2","#,
+            r#""quantity":"10","averageCost":"100","totalCostBasis":"1000","#,
+            r#""currency":"EUR","inceptionDate":"2025-01-02T12:00:00Z","lots":[{"#,
+            r#""id":"eu2-buy-1","positionId":"POS-EUSTX2-acc1","acquisitionDate":"2025-01-02T12:00:00Z","#,
+            r#""quantity":"10","costBasis":"1000","acquisitionPrice":"100","acquisitionFees":"0","#,
+            r#""fxRateToPosition":null,"fxRateToAccount":"1.4","accountCurrency":"USD","#,
+            r#""fxRateToBase":"1.4","baseCurrency":"USD"}],"#,
+            r#""createdAt":"2025-01-02T12:00:00Z","lastUpdated":"2025-01-02T12:00:00Z"}}"#
+        )
+        .replace('\'', "''");
+
+        exec(
+            pool,
+            &format!(
+                "INSERT INTO holdings_snapshots \
+                 (id, account_id, snapshot_date, currency, positions, cash_balances, cost_basis, net_contribution, calculated_at, net_contribution_base, cash_total_account_currency, cash_total_base_currency, source) \
+                 VALUES ('snapLocalFx', 'acc1', '2025-03-02', 'USD', '{positions}', '{{}}', '0', '0', '2025-03-02T00:00:00.000Z', '0', '0', '0', 'CALCULATED')"
+            ),
+        );
+        for (asset, currency) in [("EUSTX", "EUR"), ("USTX", "USD"), ("EUSTX2", "EUR")] {
+            exec(
+                pool,
+                &format!(
+                    "INSERT INTO snapshot_positions \
+                     (snapshot_id, asset_id, quantity, average_cost, total_cost_basis, currency, inception_date, is_alternative, contract_multiplier, created_at, last_updated, cost_basis_base, cost_basis_account) \
+                     VALUES ('snapLocalFx', '{asset}', '10', '100', '1000', '{currency}', '2025-01-02T12:00:00Z', 0, '1', '2025-01-02T12:00:00Z', '2025-03-02T12:00:00Z', NULL, NULL)"
+                ),
+            );
+        }
+    }
+
+    fn scalar_for(pool: &DbPool, asset: &str, column: &str) -> Option<Decimal> {
+        nullable_scalar(
+            pool,
+            &format!(
+                "SELECT COALESCE({column}, '__NULL__') AS value FROM snapshot_positions \
+                 WHERE snapshot_id = 'snapLocalFx' AND asset_id = '{asset}'"
+            ),
+        )
+        .map(|v| Decimal::from_str_exact(&v).unwrap())
+    }
+
+    /// The core hardening: a cross-currency position whose embedded lots LACK
+    /// stored FX is backfilled from the LOCAL acquisition-date FX rate (not a
+    /// valuation-date collapse, not NULL), while a same-currency control uses
+    /// identity and a lot WITH stored FX still uses its stored rate unchanged.
+    #[test]
+    fn backfills_cross_currency_from_local_fx_when_lots_lack_stored_fx() {
+        let db = setup_db();
+        seed_common(&db.pool);
+        seed_asset(&db.pool, "USTX", "USD");
+        seed_asset(&db.pool, "EUSTX2", "EUR");
+        // Local EUR->USD rates on the two acquisition dates. Distinct per date
+        // so a correct per-lot resolution cannot collapse to one rate.
+        seed_fx_rate(&db.pool, "EUR", "USD", "2025-01-02", "1.05");
+        seed_fx_rate(&db.pool, "EUR", "USD", "2025-03-02", "1.20");
+        seed_localfx_snapshot(&db.pool);
+
+        let r1 = Decimal::from_str_exact("1.05").unwrap();
+        let r2 = Decimal::from_str_exact("1.20").unwrap();
+        // (1) EUR position: 1000*1.05 + 500*1.20 = 1650 in USD (account & base).
+        let expected_eu = Decimal::from(1000) * r1 + Decimal::from(500) * r2;
+        // A valuation-date-FX collapse (single rate for both lots) would differ.
+        let collapse_eu = (Decimal::from(1000) + Decimal::from(500)) * r2; // 1800
+
+        let outcome =
+            strip_embedded_lots_migration(&db.pool, &db.db_path, &db.app_data_dir).unwrap();
+        assert!(outcome.needed);
+        assert_eq!(outcome.snapshots_migrated, 1);
+        assert_eq!(outcome.positions_backfilled, 3);
+        assert!(outcome.vacuumed);
+
+        // (1) cross-currency, NO stored FX: resolved from the local FX table,
+        // per-lot, non-NULL, not collapsed.
+        let eu_base = scalar_for(&db.pool, "EUSTX", "cost_basis_base")
+            .expect("EUSTX cost_basis_base must be backfilled, not NULL");
+        let eu_account = scalar_for(&db.pool, "EUSTX", "cost_basis_account")
+            .expect("EUSTX cost_basis_account must be backfilled, not NULL");
+        assert_eq!(eu_base, expected_eu);
+        assert_eq!(eu_account, expected_eu);
+        assert_ne!(eu_base, collapse_eu, "must not collapse to a single valuation-date rate");
+
+        // (2) same-currency control: identity -> 1000.
+        assert_eq!(
+            scalar_for(&db.pool, "USTX", "cost_basis_base").unwrap(),
+            Decimal::from(1000)
+        );
+        assert_eq!(
+            scalar_for(&db.pool, "USTX", "cost_basis_account").unwrap(),
+            Decimal::from(1000)
+        );
+
+        // (3) stored-FX happy path: uses the stored 1.4 (=> 1400), NOT the
+        // local table rate (which would give 1000*1.05 = 1050).
+        let stored_base = scalar_for(&db.pool, "EUSTX2", "cost_basis_base").unwrap();
+        assert_eq!(stored_base, Decimal::from(1400));
+        assert_ne!(
+            stored_base,
+            Decimal::from(1000) * r1,
+            "stored per-lot FX must win over the local FX table"
+        );
+        assert_eq!(
+            scalar_for(&db.pool, "EUSTX2", "cost_basis_account").unwrap(),
+            Decimal::from(1400)
+        );
+
+        // Lots stripped from the JSON.
+        let stripped = scalar_text(
+            &db.pool,
+            "SELECT positions AS value FROM holdings_snapshots WHERE id = 'snapLocalFx'",
+        )
+        .unwrap();
+        assert!(
+            !stripped.contains("\"lots\""),
+            "stripped JSON must omit the lots key entirely, got: {stripped}"
+        );
     }
 }

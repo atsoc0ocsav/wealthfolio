@@ -34,6 +34,25 @@ pub struct WriteHandle {
 }
 
 impl WriteHandle {
+    /// Creates a detached handle backed by no writer actor: the receiving end
+    /// is dropped immediately, so any write job submitted to it fails at once.
+    ///
+    /// Intended solely for read-only contexts that must construct a repository
+    /// (whose constructor requires a `WriteHandle`) purely to reuse its read
+    /// queries and never issue writes — e.g. the one-time STEP-3 startup
+    /// lot-strip migration, which builds an offline [`FxService`] over the live
+    /// pool to resolve acquisition-date FX from the local `quotes` table.
+    ///
+    /// Unlike [`spawn_writer`], this requires **no** Tokio runtime, so it is
+    /// safe to call from the synchronous migration and its non-async tests.
+    ///
+    /// [`FxService`]: wealthfolio_core::fx::FxService
+    pub fn detached() -> Self {
+        // Creating a channel needs no runtime; only spawning tasks does.
+        let (tx, _rx) = mpsc::channel(1);
+        WriteHandle { tx }
+    }
+
     /// Executes a database job on the writer actor's dedicated connection.
     ///
     /// # Arguments
