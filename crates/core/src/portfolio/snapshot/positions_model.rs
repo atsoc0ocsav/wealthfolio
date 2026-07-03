@@ -67,13 +67,13 @@ where
         if lot.cost_basis.is_zero() {
             continue;
         }
-        if let Some(rate) = lot.stored_fx_rate_to(&target) {
+        if let Some(rate) = lot.stored_fx_rate_to(target) {
             total += lot.cost_basis * rate;
             continue;
         }
 
         let acquisition_date = lot.acquisition_date_key();
-        let rate = fx_fallback(&position_currency, &target, acquisition_date)?;
+        let rate = fx_fallback(position_currency, target, acquisition_date)?;
         total += lot.cost_basis * rate;
     }
 
