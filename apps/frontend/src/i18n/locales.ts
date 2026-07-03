@@ -4,6 +4,7 @@ export const SUPPORTED_LOCALES = [
   { code: "en", label: "English" },
   { code: "fr", label: "Français" },
   { code: "de", label: "Deutsch" },
+  { code: "es", label: "Español" },
 ] as const;
 
 export type LocaleCode = (typeof SUPPORTED_LOCALES)[number]["code"];
