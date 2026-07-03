@@ -37,6 +37,11 @@ loadAllAddons();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    {/* Suspense boundary for i18next lazy-loaded translation resources: the auth
+        layer reads translations before any route-level boundary, so a top-level
+        boundary prevents a cold-load suspend from blanking the app. */}
+    <React.Suspense fallback={null}>
+      <App />
+    </React.Suspense>
   </React.StrictMode>,
 );
