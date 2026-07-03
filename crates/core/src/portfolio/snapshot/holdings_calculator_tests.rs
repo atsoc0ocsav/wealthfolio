@@ -8777,7 +8777,11 @@ mod tests {
             "2023-01-02",
         );
         snapshot = calculator
-            .calculate_next_holdings(&snapshot, &[buy1], NaiveDate::from_str("2023-01-02").unwrap())
+            .calculate_next_holdings(
+                &snapshot,
+                &[buy1],
+                NaiveDate::from_str("2023-01-02").unwrap(),
+            )
             .unwrap()
             .snapshot;
 
@@ -8793,7 +8797,11 @@ mod tests {
             "2023-01-03",
         );
         snapshot = calculator
-            .calculate_next_holdings(&snapshot, &[buy2], NaiveDate::from_str("2023-01-03").unwrap())
+            .calculate_next_holdings(
+                &snapshot,
+                &[buy2],
+                NaiveDate::from_str("2023-01-03").unwrap(),
+            )
             .unwrap()
             .snapshot;
 
@@ -8809,7 +8817,11 @@ mod tests {
             "2023-01-04",
         );
         snapshot = calculator
-            .calculate_next_holdings(&snapshot, &[split], NaiveDate::from_str("2023-01-04").unwrap())
+            .calculate_next_holdings(
+                &snapshot,
+                &[split],
+                NaiveDate::from_str("2023-01-04").unwrap(),
+            )
             .unwrap()
             .snapshot;
 
@@ -8826,7 +8838,11 @@ mod tests {
             "2023-01-05",
         );
         snapshot = calculator
-            .calculate_next_holdings(&snapshot, &[sell], NaiveDate::from_str("2023-01-05").unwrap())
+            .calculate_next_holdings(
+                &snapshot,
+                &[sell],
+                NaiveDate::from_str("2023-01-05").unwrap(),
+            )
             .unwrap()
             .snapshot;
 
@@ -8862,7 +8878,14 @@ mod tests {
 
         // Lot 1: 10 @ 100 EUR = 1000 EUR on d1.
         let buy1 = create_default_activity(
-            "buy1", ActivityType::Buy, "ADS.DE", dec!(10), dec!(100), dec!(0), "EUR", "2023-01-02",
+            "buy1",
+            ActivityType::Buy,
+            "ADS.DE",
+            dec!(10),
+            dec!(100),
+            dec!(0),
+            "EUR",
+            "2023-01-02",
         );
         snapshot = calculator
             .calculate_next_holdings(&snapshot, &[buy1], d1)
@@ -8871,7 +8894,14 @@ mod tests {
 
         // Lot 2: 5 @ 200 EUR = 1000 EUR on d2.
         let buy2 = create_default_activity(
-            "buy2", ActivityType::Buy, "ADS.DE", dec!(5), dec!(200), dec!(0), "EUR", "2023-01-03",
+            "buy2",
+            ActivityType::Buy,
+            "ADS.DE",
+            dec!(5),
+            dec!(200),
+            dec!(0),
+            "EUR",
+            "2023-01-03",
         );
         snapshot = calculator
             .calculate_next_holdings(&snapshot, &[buy2], d2)

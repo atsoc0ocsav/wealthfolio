@@ -1068,7 +1068,10 @@ mod tests {
                 .iter()
                 .filter(|record| record.asset_id == asset_id)
                 .map(|record| {
-                    let qty = record.remaining_quantity.parse::<Decimal>().unwrap_or_default();
+                    let qty = record
+                        .remaining_quantity
+                        .parse::<Decimal>()
+                        .unwrap_or_default();
                     let ratio = record
                         .split_ratio
                         .parse::<Decimal>()
@@ -1778,23 +1781,60 @@ mod tests {
         let asset_repo = Arc::new(MockAssetRepository::new());
 
         // Seed keyframe: two carried positions, both with EMPTY embedded lots.
-        let mut seed = create_blank_snapshot(&acc.id, "USD", &seed_date.format("%Y-%m-%d").to_string());
+        let mut seed =
+            create_blank_snapshot(&acc.id, "USD", &seed_date.format("%Y-%m-%d").to_string());
         seed.positions.insert(
             "AAPL".to_string(),
-            carried_position_empty_lots(&acc.id, "AAPL", dec!(10), "USD", dec!(1000), dec!(1000), dec!(1000)),
+            carried_position_empty_lots(
+                &acc.id,
+                "AAPL",
+                dec!(10),
+                "USD",
+                dec!(1000),
+                dec!(1000),
+                dec!(1000),
+            ),
         );
         // OLDCO: carried, out-of-window / inactive asset.
         seed.positions.insert(
             "OLDCO".to_string(),
-            carried_position_empty_lots(&acc.id, "OLDCO", dec!(5), "USD", dec!(100), dec!(100), dec!(100)),
+            carried_position_empty_lots(
+                &acc.id,
+                "OLDCO",
+                dec!(5),
+                "USD",
+                dec!(100),
+                dec!(100),
+                dec!(100),
+            ),
         );
         let snapshot_repo = Arc::new(MockSnapshotRepository::new());
         snapshot_repo.add_snapshots(vec![seed]);
 
         let seed_date_str = seed_date.format("%Y-%m-%d").to_string();
         let lot_repo = SeededLotRepository::new(vec![
-            make_open_lot_record("lot-aapl", &acc.id, "AAPL", &seed_date_str, dec!(10), dec!(100), "USD", "USD", dec!(1)),
-            make_open_lot_record("lot-oldco", &acc.id, "OLDCO", &seed_date_str, dec!(5), dec!(20), "USD", "USD", dec!(1)),
+            make_open_lot_record(
+                "lot-aapl",
+                &acc.id,
+                "AAPL",
+                &seed_date_str,
+                dec!(10),
+                dec!(100),
+                "USD",
+                "USD",
+                dec!(1),
+            ),
+            make_open_lot_record(
+                "lot-oldco",
+                &acc.id,
+                "OLDCO",
+                &seed_date_str,
+                dec!(5),
+                dec!(20),
+                "USD",
+                "USD",
+                dec!(1),
+            ),
         ]);
         let lot_repo_assert = lot_repo.clone();
 
@@ -1838,8 +1878,15 @@ mod tests {
     /// lots sum to the position quantity.
     #[test]
     fn test_hydrated_seed_lots_pass_consistency_check() {
-        let mut position =
-            carried_position_empty_lots("acc1", "AAPL", dec!(10), "USD", dec!(1000), dec!(1000), dec!(1000));
+        let mut position = carried_position_empty_lots(
+            "acc1",
+            "AAPL",
+            dec!(10),
+            "USD",
+            dec!(1000),
+            dec!(1000),
+            dec!(1000),
+        );
 
         let mut snapshot = AccountStateSnapshot {
             id: "acc1_seed".to_string(),
@@ -1862,11 +1909,22 @@ mod tests {
 
         // Hydrate from the table and re-check.
         let record = make_open_lot_record(
-            "lot-aapl", "acc1", "AAPL", "2024-01-02", dec!(10), dec!(100), "USD", "USD", dec!(1),
+            "lot-aapl",
+            "acc1",
+            "AAPL",
+            "2024-01-02",
+            dec!(10),
+            dec!(100),
+            "USD",
+            "USD",
+            dec!(1),
         );
         position
             .lots
-            .push_back(crate::lots::lot_record_to_snapshot_lot(&position.id, record));
+            .push_back(crate::lots::lot_record_to_snapshot_lot(
+                &position.id,
+                record,
+            ));
         snapshot.positions.insert("AAPL".to_string(), position);
 
         let records = crate::lots::extract_lot_records(&snapshot);
@@ -1908,8 +1966,15 @@ mod tests {
             let seed_date_str = seed_date.format("%Y-%m-%d").to_string();
 
             let deposit = create_test_activity(
-                "dep1", &acc.id, Some("CASH:EUR"), "DEPOSIT", old_deposit_date, None, None,
-                Some(dec!(10000)), "EUR",
+                "dep1",
+                &acc.id,
+                Some("CASH:EUR"),
+                "DEPOSIT",
+                old_deposit_date,
+                None,
+                None,
+                Some(dec!(10000)),
+                "EUR",
             );
             let activity_repo = Arc::new(MockActivityRepositoryWithData::new(vec![deposit]));
 
@@ -1923,17 +1988,34 @@ mod tests {
             let asset_repo = Arc::new(MockAssetRepository::new());
 
             let mut position = carried_position_empty_lots(
-                &acc.id, "AAPL", dec!(10), "EUR", dec!(1000), dec!(1000), dec!(1100),
+                &acc.id,
+                "AAPL",
+                dec!(10),
+                "EUR",
+                dec!(1000),
+                dec!(1000),
+                dec!(1100),
             );
             if embedded {
                 // Legacy seed: embed the lot directly (pre-STEP-2). Hydration
                 // is skipped because embedded lots are present.
                 let record = make_open_lot_record(
-                    "lot-aapl", &acc.id, "AAPL", &seed_date_str, dec!(10), dec!(100), "EUR", "USD", dec!(1.1),
+                    "lot-aapl",
+                    &acc.id,
+                    "AAPL",
+                    &seed_date_str,
+                    dec!(10),
+                    dec!(100),
+                    "EUR",
+                    "USD",
+                    dec!(1.1),
                 );
                 position
                     .lots
-                    .push_back(crate::lots::lot_record_to_snapshot_lot(&position.id, record));
+                    .push_back(crate::lots::lot_record_to_snapshot_lot(
+                        &position.id,
+                        record,
+                    ));
             }
             let mut seed = create_blank_snapshot(&acc.id, "EUR", &seed_date_str);
             seed.positions.insert("AAPL".to_string(), position);
@@ -1942,11 +2024,24 @@ mod tests {
 
             // Table always has the lot; hydration only fires when embedded is empty.
             let lot_repo = SeededLotRepository::new(vec![make_open_lot_record(
-                "lot-aapl", &acc.id, "AAPL", &seed_date_str, dec!(10), dec!(100), "EUR", "USD", dec!(1.1),
+                "lot-aapl",
+                &acc.id,
+                "AAPL",
+                &seed_date_str,
+                dec!(10),
+                dec!(100),
+                "EUR",
+                "USD",
+                dec!(1.1),
             )]);
 
             let svc = SnapshotService::new(
-                base_currency_arc, account_repo, activity_repo, snapshot_repo.clone(), asset_repo, fx,
+                base_currency_arc,
+                account_repo,
+                activity_repo,
+                snapshot_repo.clone(),
+                asset_repo,
+                fx,
             )
             .with_lot_repository(Arc::new(lot_repo));
 

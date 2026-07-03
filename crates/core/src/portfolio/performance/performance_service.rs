@@ -8733,9 +8733,21 @@ mod tests {
                 Decimal::ZERO,
             ),
             // Funded with 100.
-            valuation("2026-05-02", dec!(100), dec!(100), Decimal::ZERO, Decimal::ZERO),
+            valuation(
+                "2026-05-02",
+                dec!(100),
+                dec!(100),
+                Decimal::ZERO,
+                Decimal::ZERO,
+            ),
             // Grows +10% (quiet day).
-            valuation("2026-05-03", dec!(110), dec!(100), Decimal::ZERO, Decimal::ZERO),
+            valuation(
+                "2026-05-03",
+                dec!(110),
+                dec!(100),
+                Decimal::ZERO,
+                Decimal::ZERO,
+            ),
             // Fully transferred out, leaving 0.0027 dust (zero-move boundary:
             // 0.0027 + 109.9973 - 110 - 0 = 0).
             valuation(

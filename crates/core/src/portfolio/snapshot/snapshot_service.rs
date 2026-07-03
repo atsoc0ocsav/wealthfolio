@@ -979,10 +979,9 @@ impl SnapshotService {
                 .get(&asset_id)
                 .map(|p| p.id.clone())
                 .unwrap_or_else(|| asset_id.clone());
-            lots_by_asset
-                .entry(asset_id)
-                .or_default()
-                .push_back(crate::lots::lot_record_to_snapshot_lot(&position_id, record));
+            lots_by_asset.entry(asset_id).or_default().push_back(
+                crate::lots::lot_record_to_snapshot_lot(&position_id, record),
+            );
         }
 
         for (asset_id, position) in snapshot.positions.iter_mut() {

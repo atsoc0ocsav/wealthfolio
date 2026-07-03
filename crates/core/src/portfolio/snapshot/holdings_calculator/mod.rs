@@ -420,8 +420,7 @@ impl HoldingsCalculator {
         for position in next_state.positions.values_mut() {
             let cost_basis_account =
                 self.precompute_position_cost_basis(position, &account_currency);
-            let cost_basis_base =
-                self.precompute_position_cost_basis(position, &base_currency);
+            let cost_basis_base = self.precompute_position_cost_basis(position, &base_currency);
             position.cost_basis_account = cost_basis_account;
             position.cost_basis_base = cost_basis_base;
         }

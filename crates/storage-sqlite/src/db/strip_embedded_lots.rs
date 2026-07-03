@@ -142,11 +142,12 @@ pub fn strip_embedded_lots_migration(
 
     // 1) GUARD / idempotency: only proceed if some positions JSON still embeds
     //    lots. On a clean/compact DB this returns nothing and we do nothing.
-    let candidates: Vec<SnapshotRow> =
-        sql_query("SELECT id, account_id, positions FROM holdings_snapshots WHERE positions LIKE ?")
-            .bind::<Text, _>(EMBEDDED_LOTS_LIKE)
-            .load(&mut conn)
-            .map_err(StorageError::from)?;
+    let candidates: Vec<SnapshotRow> = sql_query(
+        "SELECT id, account_id, positions FROM holdings_snapshots WHERE positions LIKE ?",
+    )
+    .bind::<Text, _>(EMBEDDED_LOTS_LIKE)
+    .load(&mut conn)
+    .map_err(StorageError::from)?;
 
     if candidates.is_empty() {
         return Ok(StripEmbeddedLotsOutcome::default());
@@ -220,16 +221,14 @@ pub fn strip_embedded_lots_migration(
             // `compute_position_cost_basis_from_lots`, the shared arithmetic
             // with write-time precompute. When the rate cannot be resolved
             // locally the helper yields `None`, leaving the scalar `NULL`.
-            let cost_basis_account = compute_position_cost_basis_from_lots(
-                pos,
-                &account_currency,
-                |from, to, date| resolve_fx_fallback(fx_service.as_ref(), from, to, date),
-            );
-            let cost_basis_base = compute_position_cost_basis_from_lots(
-                pos,
-                &base_currency,
-                |from, to, date| resolve_fx_fallback(fx_service.as_ref(), from, to, date),
-            );
+            let cost_basis_account =
+                compute_position_cost_basis_from_lots(pos, &account_currency, |from, to, date| {
+                    resolve_fx_fallback(fx_service.as_ref(), from, to, date)
+                });
+            let cost_basis_base =
+                compute_position_cost_basis_from_lots(pos, &base_currency, |from, to, date| {
+                    resolve_fx_fallback(fx_service.as_ref(), from, to, date)
+                });
 
             // Mirror the scalars into the Position so the stripped JSON matches
             // the STEP-2 write shape and the JSON-fallback read path stays
@@ -364,7 +363,11 @@ fn fetch_account_currency(conn: &mut SqliteConnection, account_id: &str) -> Resu
         .bind::<Text, _>(account_id)
         .load(conn)
         .map_err(StorageError::from)?;
-    Ok(rows.into_iter().next().map(|row| row.value).unwrap_or_default())
+    Ok(rows
+        .into_iter()
+        .next()
+        .map(|row| row.value)
+        .unwrap_or_default())
 }
 
 /// Build an **offline** [`FxService`] over `pool`, backed by the storage-sqlite
@@ -383,7 +386,10 @@ fn fetch_account_currency(conn: &mut SqliteConnection, account_id: &str) -> Resu
 /// case the backfill falls back to same-currency identity only — the exact
 /// behavior prior to this hardening, so no scalar is ever fabricated.
 fn build_offline_fx_service(pool: &DbPool) -> Option<FxService> {
-    let repository = Arc::new(FxRepository::new(Arc::new(pool.clone()), WriteHandle::detached()));
+    let repository = Arc::new(FxRepository::new(
+        Arc::new(pool.clone()),
+        WriteHandle::detached(),
+    ));
     let service = FxService::new(repository);
     match service.initialize() {
         Ok(()) => Some(service),
@@ -436,11 +442,7 @@ mod tests {
     fn setup_db() -> TestDb {
         let dir = tempfile::tempdir().expect("tempdir");
         let app_data_dir = dir.path().to_string_lossy().to_string();
-        let db_path = dir
-            .path()
-            .join("app.db")
-            .to_string_lossy()
-            .to_string();
+        let db_path = dir.path().join("app.db").to_string_lossy().to_string();
         run_migrations(&db_path).expect("run migrations");
         let pool = (*create_pool(&db_path).expect("create pool")).clone();
         TestDb {
@@ -563,9 +565,8 @@ mod tests {
         let positions: HashMap<String, Position> =
             serde_json::from_str(&old_positions_json()).unwrap();
         let pos = positions.get("EUSTX").unwrap();
-        let identity = |from: &str, to: &str, _d: chrono::NaiveDate| {
-            (from == to).then_some(Decimal::ONE)
-        };
+        let identity =
+            |from: &str, to: &str, _d: chrono::NaiveDate| (from == to).then_some(Decimal::ONE);
         let expected_base = compute_position_cost_basis_from_lots(pos, "USD", identity).unwrap();
         let expected_account = compute_position_cost_basis_from_lots(pos, "USD", identity).unwrap();
         // 1000*1.1 + 500*1.3 = 1750; a valuation-date-FX collapse would differ.
@@ -590,15 +591,24 @@ mod tests {
             "SELECT COALESCE(cost_basis_account, '__NULL__') AS value FROM snapshot_positions WHERE snapshot_id = 'snap1' AND asset_id = 'EUSTX'",
         )
         .expect("cost_basis_account backfilled");
-        assert_eq!(Decimal::from_str_exact(&stored_base).unwrap(), expected_base);
+        assert_eq!(
+            Decimal::from_str_exact(&stored_base).unwrap(),
+            expected_base
+        );
         assert_eq!(
             Decimal::from_str_exact(&stored_account).unwrap(),
             expected_account
         );
 
         // (b) cross-currency did NOT collapse to a single valuation-date rate.
-        assert_eq!(Decimal::from_str_exact(&stored_base).unwrap(), Decimal::from(1750));
-        assert_ne!(Decimal::from_str_exact(&stored_base).unwrap(), Decimal::from(2250));
+        assert_eq!(
+            Decimal::from_str_exact(&stored_base).unwrap(),
+            Decimal::from(1750)
+        );
+        assert_ne!(
+            Decimal::from_str_exact(&stored_base).unwrap(),
+            Decimal::from(2250)
+        );
 
         // (c) positions JSON no longer embeds lots.
         let stripped = scalar_text(
@@ -630,8 +640,7 @@ mod tests {
         seed_common(&db.pool);
         seed_old_snapshot(&db.pool);
 
-        let first =
-            strip_embedded_lots_migration(&db.pool, &db.db_path, &db.app_data_dir).unwrap();
+        let first = strip_embedded_lots_migration(&db.pool, &db.db_path, &db.app_data_dir).unwrap();
         assert!(first.needed);
         assert!(first.vacuumed);
         assert_eq!(backups_count(&db.app_data_dir), 1);
@@ -704,7 +713,10 @@ mod tests {
             &db.pool,
             "SELECT COALESCE(cost_basis_base, '__NULL__') AS value FROM snapshot_positions WHERE snapshot_id = 'snap1' AND asset_id = 'EUSTX'",
         );
-        assert!(base.is_none(), "cost_basis_base must remain NULL after abort");
+        assert!(
+            base.is_none(),
+            "cost_basis_base must remain NULL after abort"
+        );
     }
 
     /// Insert a non-FX INVESTMENT asset (so positions can reference it).
@@ -852,7 +864,10 @@ mod tests {
             .expect("EUSTX cost_basis_account must be backfilled, not NULL");
         assert_eq!(eu_base, expected_eu);
         assert_eq!(eu_account, expected_eu);
-        assert_ne!(eu_base, collapse_eu, "must not collapse to a single valuation-date rate");
+        assert_ne!(
+            eu_base, collapse_eu,
+            "must not collapse to a single valuation-date rate"
+        );
 
         // (2) same-currency control: identity -> 1000.
         assert_eq!(
