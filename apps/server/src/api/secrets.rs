@@ -10,7 +10,9 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use wealthfolio_core::secrets::{addon_secret_service_id, validate_unscoped_secret_service_id};
+use wealthfolio_core::secrets::{
+    addon_secret_service_id, legacy_addon_secret_service_id, validate_unscoped_secret_service_id,
+};
 
 fn ensure_secret_api_auth(state: &AppState) -> ApiResult<()> {
     if state.auth.is_none() {
@@ -80,7 +82,10 @@ async fn set_addon_secret(
 ) -> ApiResult<StatusCode> {
     ensure_secret_api_auth(&state)?;
     let service_id = addon_secret_service_id(&addon_id, &body.key).map_err(ApiError::BadRequest)?;
+    let legacy_service_id =
+        legacy_addon_secret_service_id(&addon_id, &body.key).map_err(ApiError::BadRequest)?;
     state.secret_store.set_secret(&service_id, &body.secret)?;
+    state.secret_store.delete_secret(&legacy_service_id)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -96,7 +101,17 @@ async fn get_addon_secret(
 ) -> ApiResult<Json<Option<String>>> {
     ensure_secret_api_auth(&state)?;
     let service_id = addon_secret_service_id(&addon_id, &q.key).map_err(ApiError::BadRequest)?;
-    let val = state.secret_store.get_secret(&service_id)?;
+    if let Some(value) = state.secret_store.get_secret(&service_id)? {
+        return Ok(Json(Some(value)));
+    }
+
+    let legacy_service_id =
+        legacy_addon_secret_service_id(&addon_id, &q.key).map_err(ApiError::BadRequest)?;
+    let val = state.secret_store.get_secret(&legacy_service_id)?;
+    if let Some(secret) = val.as_deref() {
+        state.secret_store.set_secret(&service_id, secret)?;
+        state.secret_store.delete_secret(&legacy_service_id)?;
+    }
     Ok(Json(val))
 }
 
@@ -107,7 +122,10 @@ async fn delete_addon_secret(
 ) -> ApiResult<StatusCode> {
     ensure_secret_api_auth(&state)?;
     let service_id = addon_secret_service_id(&addon_id, &q.key).map_err(ApiError::BadRequest)?;
+    let legacy_service_id =
+        legacy_addon_secret_service_id(&addon_id, &q.key).map_err(ApiError::BadRequest)?;
     state.secret_store.delete_secret(&service_id)?;
+    state.secret_store.delete_secret(&legacy_service_id)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

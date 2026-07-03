@@ -179,6 +179,12 @@ function isAddonRouteNamespaceAllowed(addonId: string, path: string, aliases: st
   );
 }
 
+function getAddonRouteNamespaceFromPath(path: string) {
+  const href = cleanRoutePath(path);
+  const match = /^\/addons?\/([^/?#]+)/.exec(href);
+  return match?.[1];
+}
+
 function hasRegisteredAddonNavPrefix(addonId: string, path: string) {
   return Array.from(dynamicNavItems.values()).some(
     (item) => item.addonId === addonId && isPathWithinRoutePrefix(path, item.href),
@@ -227,7 +233,12 @@ export function registerAddonRoute(
   }
 
   const href = cleanRoutePath(route.path);
-  if (!isAddonRoutePathAllowed(addonId, href) && !hasRegisteredAddonNavPrefix(addonId, href)) {
+  const routeNamespace = getAddonRouteNamespaceFromPath(href);
+  const aliases = [routeId, routeNamespace].filter((alias): alias is string => Boolean(alias));
+  if (
+    !isAddonRouteNamespaceAllowed(addonId, href, aliases) &&
+    !hasRegisteredAddonNavPrefix(addonId, href)
+  ) {
     throw new Error(`Addon '${addonId}' cannot register route '${href}'`);
   }
 

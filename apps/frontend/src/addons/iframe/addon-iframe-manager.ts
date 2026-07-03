@@ -15,6 +15,7 @@ import { createPermissionGuard, type PermissionGuard } from "../type-bridge";
 const CHANNEL = "wealthfolio:addon-sandbox:v1";
 const LOAD_TIMEOUT_MS = 10_000;
 const ROUTE_RENDER_TIMEOUT_MS = 10_000;
+const DISABLE_TIMEOUT_MS = 1_000;
 
 interface StartAddonInput {
   addonId: string;
@@ -63,6 +64,7 @@ interface Runtime {
   routeRenderTimeout?: number;
   routeStatusListeners: Set<AddonRouteStatusListener>;
   subscriptions: Map<string, () => Promise<void> | void>;
+  disableAck?: () => void;
   resolveLoad: (handle: AddonRuntimeHandle) => void;
   rejectLoad: (error: Error) => void;
   loadTimer: number;
@@ -163,12 +165,11 @@ function getParkingRoot() {
   if (!root) {
     root = document.createElement("div");
     root.id = "addon-sandbox-parking";
-    root.setAttribute("aria-hidden", "true");
     Object.assign(root.style, {
-      height: "0",
-      overflow: "hidden",
-      position: "absolute",
-      width: "0",
+      inset: "0",
+      overflow: "visible",
+      pointerEvents: "none",
+      position: "fixed",
     });
     document.body.appendChild(root);
   }
@@ -299,6 +300,8 @@ function getMethod(target: unknown, methodPath: string, allowedMethods: Set<stri
 export class AddonIframeManager {
   private runtimes = new Map<string, Runtime>();
   private listening = false;
+  private frameLayoutUpdateFrame?: number;
+  private layoutListening = false;
   private themeObserver?: MutationObserver;
   private themeUpdateFrame?: number;
 
@@ -320,9 +323,13 @@ export class AddonIframeManager {
       backgroundColor: "transparent",
       colorScheme: initialTheme.colorScheme,
       display: "block",
-      height: "100%",
+      height: "0",
+      left: "0",
+      pointerEvents: "none",
+      position: "fixed",
+      top: "0",
       visibility: "hidden",
-      width: "100%",
+      width: "0",
     });
 
     const credentiallessFrame = iframe as HTMLIFrameElement & { credentialless?: boolean };
@@ -408,12 +415,8 @@ export class AddonIframeManager {
 
     runtime.activeContainer = container;
     runtime.iframe.style.visibility = runtime.lastRenderedRouteKey ? "visible" : "hidden";
-    if (runtime.iframe.parentElement !== container) {
-      container.appendChild(runtime.iframe);
-    }
-    runtime.iframe.style.height = "100%";
-    runtime.iframe.style.minHeight = "calc(100vh - 96px)";
-    runtime.iframe.style.width = "100%";
+    this.ensureLayoutListener();
+    this.updateFrameBounds(runtime);
   }
 
   updateRoute(addonId: string, routeId: string, location: AddonRouteLocation) {
@@ -438,7 +441,8 @@ export class AddonIframeManager {
     runtime.activeContainer = undefined;
     runtime.activeRouteRequestId = undefined;
     clearPendingRouteRender(runtime);
-    getParkingRoot().appendChild(runtime.iframe);
+    this.hideFrame(runtime);
+    this.stopLayoutListenerIfIdle();
   }
 
   async stopAddon(addonId: string) {
@@ -448,11 +452,45 @@ export class AddonIframeManager {
       return;
     }
 
-    this.post(runtime, "disable");
     clearTimeout(runtime.loadTimer);
     runtime.activeRouteRequestId = undefined;
     clearPendingRouteRender(runtime);
     runtime.rejectLoad(new Error(`Addon '${addonId}' was unloaded before it finished loading`));
+
+    const disabled = runtime.isLoaded ? this.waitForDisable(runtime) : Promise.resolve(true);
+    this.post(runtime, "disable");
+    if (!(await disabled)) {
+      logger.warn(`Timed out waiting for addon '${addonId}' to disable`);
+    }
+
+    await this.clearSubscriptions(runtime);
+    this.hideFrame(runtime);
+    runtime.iframe.remove();
+    this.runtimes.delete(addonId);
+    clearAddonRegistrations(addonId);
+    this.stopLayoutListenerIfIdle();
+    this.stopThemeObserverIfIdle();
+  }
+
+  private waitForDisable(runtime: Runtime) {
+    return new Promise<boolean>((resolve) => {
+      let ack: () => void = () => undefined;
+      const timer = window.setTimeout(() => {
+        if (runtime.disableAck === ack) {
+          runtime.disableAck = undefined;
+        }
+        resolve(false);
+      }, DISABLE_TIMEOUT_MS);
+
+      ack = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      runtime.disableAck = ack;
+    });
+  }
+
+  private async clearSubscriptions(runtime: Runtime) {
     for (const unsubscribe of runtime.subscriptions.values()) {
       try {
         await unsubscribe();
@@ -461,10 +499,89 @@ export class AddonIframeManager {
       }
     }
     runtime.subscriptions.clear();
-    runtime.iframe.remove();
-    this.runtimes.delete(addonId);
-    clearAddonRegistrations(addonId);
-    this.stopThemeObserverIfIdle();
+  }
+
+  private async resetRuntimeForReload(runtime: Runtime) {
+    runtime.isLoaded = false;
+    runtime.lastRenderedRouteKey = undefined;
+    runtime.activeRouteRequestId = undefined;
+    clearPendingRouteRender(runtime);
+    runtime.iframe.style.visibility = "hidden";
+    await this.clearSubscriptions(runtime);
+    clearAddonRegistrations(runtime.addonId);
+  }
+
+  private ensureLayoutListener() {
+    if (this.layoutListening) {
+      return;
+    }
+    window.addEventListener("resize", this.scheduleFrameLayoutUpdate);
+    window.addEventListener("scroll", this.scheduleFrameLayoutUpdate, true);
+    this.layoutListening = true;
+  }
+
+  private stopLayoutListenerIfIdle() {
+    if (Array.from(this.runtimes.values()).some((runtime) => runtime.activeContainer)) {
+      return;
+    }
+    if (!this.layoutListening) {
+      return;
+    }
+    window.removeEventListener("resize", this.scheduleFrameLayoutUpdate);
+    window.removeEventListener("scroll", this.scheduleFrameLayoutUpdate, true);
+    this.layoutListening = false;
+    if (this.frameLayoutUpdateFrame) {
+      cancelAnimationFrame(this.frameLayoutUpdateFrame);
+      this.frameLayoutUpdateFrame = undefined;
+    }
+  }
+
+  private scheduleFrameLayoutUpdate = () => {
+    if (this.frameLayoutUpdateFrame) {
+      return;
+    }
+
+    this.frameLayoutUpdateFrame = requestAnimationFrame(() => {
+      this.frameLayoutUpdateFrame = undefined;
+      for (const runtime of this.runtimes.values()) {
+        if (runtime.activeContainer) {
+          this.updateFrameBounds(runtime);
+        }
+      }
+    });
+  };
+
+  private hideFrame(runtime: Runtime) {
+    Object.assign(runtime.iframe.style, {
+      height: "0",
+      left: "0",
+      minHeight: "0",
+      pointerEvents: "none",
+      top: "0",
+      visibility: "hidden",
+      width: "0",
+    });
+  }
+
+  private updateFrameBounds(runtime: Runtime) {
+    const container = runtime.activeContainer;
+    if (!container?.isConnected) {
+      this.hideFrame(runtime);
+      return;
+    }
+
+    const rect = container.getBoundingClientRect();
+    const width = Math.max(rect.width, 0);
+    const height = Math.max(rect.height, 0);
+    Object.assign(runtime.iframe.style, {
+      height: `${height}px`,
+      left: `${rect.left}px`,
+      minHeight: "0",
+      pointerEvents:
+        runtime.iframe.style.visibility === "visible" && width > 0 && height > 0 ? "auto" : "none",
+      top: `${rect.top}px`,
+      width: `${width}px`,
+    });
   }
 
   private ensureListener() {
@@ -496,7 +613,7 @@ export class AddonIframeManager {
     try {
       switch (message.type) {
         case "ready":
-          runtime.isLoaded = false;
+          await this.resetRuntimeForReload(runtime);
           this.post(runtime, "loadAddon", {
             code: runtime.code,
             files: runtime.files,
@@ -518,6 +635,10 @@ export class AddonIframeManager {
         }
         case "runtimeError":
           logger.error(`Addon '${runtime.addonId}' runtime error: ${message.error || "unknown"}`);
+          break;
+        case "disabled":
+          runtime.disableAck?.();
+          runtime.disableAck = undefined;
           break;
         case "routeRendered":
           this.handleRouteRendered(runtime, message);
@@ -643,6 +764,7 @@ export class AddonIframeManager {
     if (routeKey) {
       runtime.lastRenderedRouteKey = routeKey;
       runtime.iframe.style.visibility = "visible";
+      this.updateFrameBounds(runtime);
       this.emitRouteStatus(runtime, { routeKey, status: "rendered" });
     }
   }
@@ -758,6 +880,7 @@ export class AddonIframeManager {
     runtime.activeRouteRequestId = requestId;
     const hasRenderedContent = Boolean(runtime.lastRenderedRouteKey);
     runtime.iframe.style.visibility = hasRenderedContent ? "visible" : "hidden";
+    this.updateFrameBounds(runtime);
     this.emitRouteStatus(runtime, {
       cold: !hasRenderedContent,
       routeKey,
@@ -783,6 +906,7 @@ export class AddonIframeManager {
       runtime.activeRouteRequestId = undefined;
       clearPendingRouteRender(runtime);
       runtime.iframe.style.visibility = runtime.lastRenderedRouteKey ? "visible" : "hidden";
+      this.updateFrameBounds(runtime);
       this.emitRouteStatus(runtime, {
         error: `Timed out rendering add-on route '${route.routeId}'`,
         routeKey,

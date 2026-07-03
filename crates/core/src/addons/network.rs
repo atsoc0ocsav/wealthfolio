@@ -13,11 +13,15 @@ use tokio::net::lookup_host;
 use url::Url;
 
 use super::validate_addon_id;
-use crate::secrets::{addon_secret_service_id, SecretStore};
+use crate::secrets::{addon_secret_service_id, legacy_addon_secret_service_id, SecretStore};
 
 const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
 const MAX_RESPONSE_BODY_BYTES: usize = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT_SECS: u64 = 10;
+
+fn validate_addon_runtime_id(addon_id: &str) -> Result<(), String> {
+    validate_addon_id(&addon_id.to_ascii_lowercase())
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,7 +56,7 @@ pub async fn perform_addon_network_request(
     allowed_hosts: &[String],
     request: AddonNetworkRequest,
 ) -> Result<AddonNetworkResponse, String> {
-    validate_addon_id(addon_id)?;
+    validate_addon_runtime_id(addon_id)?;
     let url = validate_url(&request.url, allowed_hosts)?;
     let host = url
         .host_str()
@@ -131,7 +135,7 @@ pub fn resolve_addon_network_auth_header(
     auth: Option<&AddonNetworkAuth>,
     secret_store: &dyn SecretStore,
 ) -> Result<Option<String>, String> {
-    validate_addon_id(addon_id)?;
+    validate_addon_runtime_id(addon_id)?;
     let Some(auth) = auth else {
         return Ok(None);
     };
@@ -139,10 +143,17 @@ pub fn resolve_addon_network_auth_header(
         return Err("Addon network auth type is not supported".to_string());
     }
     let service_id = addon_secret_service_id(addon_id, &auth.secret_key)?;
-    let secret = secret_store
+    let legacy_service_id = legacy_addon_secret_service_id(addon_id, &auth.secret_key)?;
+    let secret = match secret_store
         .get_secret(&service_id)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Addon network auth secret was not found".to_string())?;
+    {
+        Some(secret) => secret,
+        None => secret_store
+            .get_secret(&legacy_service_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Addon network auth secret was not found".to_string())?,
+    };
     if secret.trim().is_empty() {
         return Err("Addon network auth secret is empty".to_string());
     }
@@ -366,6 +377,27 @@ mod tests {
         .unwrap();
 
         assert_eq!(header, Some("Bearer secret-token".to_string()));
+    }
+
+    #[test]
+    fn resolves_bearer_auth_from_legacy_addon_secret() {
+        let store = TestSecretStore {
+            secrets: BTreeMap::from([(
+                "addon_example-addon_apitoken".to_string(),
+                "legacy-token".to_string(),
+            )]),
+        };
+        let header = resolve_addon_network_auth_header(
+            "example-addon",
+            Some(&AddonNetworkAuth {
+                auth_type: "bearer".to_string(),
+                secret_key: "ApiToken".to_string(),
+            }),
+            &store,
+        )
+        .unwrap();
+
+        assert_eq!(header, Some("Bearer legacy-token".to_string()));
     }
 
     #[test]

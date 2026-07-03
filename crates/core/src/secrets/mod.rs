@@ -11,7 +11,7 @@ pub fn format_service_id(service: &str) -> String {
     format!("{}{}", SERVICE_PREFIX, service.to_lowercase())
 }
 
-pub fn validate_addon_secret_key(key: &str) -> std::result::Result<(), String> {
+pub fn normalize_addon_secret_key(key: &str) -> std::result::Result<String, String> {
     if key.is_empty() {
         return Err("Addon secret key cannot be empty".to_string());
     }
@@ -22,15 +22,24 @@ pub fn validate_addon_secret_key(key: &str) -> std::result::Result<(), String> {
 
     if !key
         .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
     {
         return Err(
-            "Addon secret key may only contain lowercase ASCII letters, digits, '.', '_' and '-'"
-                .to_string(),
+            "Addon secret key may only contain ASCII letters, digits, '.', '_' and '-'".to_string(),
         );
     }
 
-    Ok(())
+    Ok(key.to_ascii_lowercase())
+}
+
+pub fn validate_addon_secret_key(key: &str) -> std::result::Result<(), String> {
+    normalize_addon_secret_key(key).map(|_| ())
+}
+
+fn normalize_addon_secret_addon_id(addon_id: &str) -> std::result::Result<String, String> {
+    let addon_id = addon_id.to_ascii_lowercase();
+    validate_addon_id(&addon_id)?;
+    Ok(addon_id)
 }
 
 pub fn validate_unscoped_secret_service_id(service: &str) -> std::result::Result<(), String> {
@@ -46,9 +55,18 @@ pub fn validate_unscoped_secret_service_id(service: &str) -> std::result::Result
 }
 
 pub fn addon_secret_service_id(addon_id: &str, key: &str) -> std::result::Result<String, String> {
-    validate_addon_id(addon_id)?;
-    validate_addon_secret_key(key)?;
+    let addon_id = normalize_addon_secret_addon_id(addon_id)?;
+    let key = normalize_addon_secret_key(key)?;
     Ok(format!("addon:{}:{}", addon_id, key))
+}
+
+pub fn legacy_addon_secret_service_id(
+    addon_id: &str,
+    key: &str,
+) -> std::result::Result<String, String> {
+    let addon_id = normalize_addon_secret_addon_id(addon_id)?;
+    let key = normalize_addon_secret_key(key)?;
+    Ok(format!("addon_{}_{}", addon_id, key))
 }
 
 /// Platform-agnostic contract for storing provider secrets. Concrete
@@ -71,10 +89,21 @@ mod tests {
             addon_secret_service_id("example-addon", "api_key").unwrap(),
             "addon:example-addon:api_key"
         );
+        assert_eq!(
+            addon_secret_service_id("example-addon", "ApiKey").unwrap(),
+            "addon:example-addon:apikey"
+        );
+        assert_eq!(
+            legacy_addon_secret_service_id("example-addon", "ApiKey").unwrap(),
+            "addon_example-addon_apikey"
+        );
+        assert_eq!(
+            addon_secret_service_id("Example-Addon", "ApiKey").unwrap(),
+            "addon:example-addon:apikey"
+        );
 
         assert!(addon_secret_service_id("../bad", "api_key").is_err());
         assert!(addon_secret_service_id("example-addon", "../token").is_err());
-        assert!(addon_secret_service_id("example-addon", "ApiKey").is_err());
     }
 
     #[test]

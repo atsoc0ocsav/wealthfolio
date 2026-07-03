@@ -1192,6 +1192,60 @@ mod service_tests {
     }
 
     #[tokio::test]
+    async fn test_legacy_manifest_id_addon_can_load_toggle_and_uninstall() {
+        let temp_dir = env::temp_dir().join("wealthfolio_test_legacy_addon_id");
+        if temp_dir.exists() {
+            std::fs::remove_dir_all(&temp_dir).ok();
+        }
+
+        let service = AddonService::new(&temp_dir, "test-instance");
+        let addon_dir = temp_dir.join("addons").join("LegacyAddon");
+        std::fs::create_dir_all(&addon_dir).expect("addon dir should be created");
+        std::fs::write(
+            addon_dir.join("manifest.json"),
+            r#"{
+                "id": "LegacyAddon",
+                "name": "Legacy Addon",
+                "version": "1.0.0",
+                "main": "addon.js",
+                "enabled": true
+            }"#,
+        )
+        .expect("manifest should be written");
+        std::fs::write(
+            addon_dir.join("addon.js"),
+            "export default function enable() {}",
+        )
+        .expect("addon should be written");
+
+        let loaded = service
+            .load_addon_for_runtime("LegacyAddon")
+            .expect("legacy installed addon should load by manifest id");
+        assert_eq!(loaded.metadata.id, "LegacyAddon");
+
+        service
+            .toggle_addon("LegacyAddon", false)
+            .expect("legacy installed addon should toggle");
+        let manifest: AddonManifest = serde_json::from_str(
+            &std::fs::read_to_string(addon_dir.join("manifest.json"))
+                .expect("manifest should still be readable"),
+        )
+        .expect("manifest should parse");
+        assert_eq!(manifest.enabled, Some(false));
+
+        service
+            .uninstall_addon("LegacyAddon")
+            .await
+            .expect("legacy installed addon should uninstall");
+        assert!(
+            !addon_dir.exists(),
+            "legacy addon directory should be removed"
+        );
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[tokio::test]
     async fn test_install_addon_zip_rejects_unsafe_paths_without_writing_files() {
         let temp_dir = env::temp_dir().join("wealthfolio_test_addon_zip_traversal");
         if temp_dir.exists() {

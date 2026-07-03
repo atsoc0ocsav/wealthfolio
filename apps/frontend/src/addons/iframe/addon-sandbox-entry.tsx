@@ -148,12 +148,30 @@ function createAddonModuleRegistry(code: string, files: SandboxAddonFile[] = [])
   const cssSources = new Map<string, { path: string; source: string }>();
   const mainFile = files.find((file) => file.isMain) ?? files.find((file) => file.content === code);
   const mainPath = normalizeModulePath(mainFile?.name ?? "addon.js");
+  const moduleBasenameCounts = new Map<string, number>();
+  const cssBasenameCounts = new Map<string, number>();
+
+  for (const file of files) {
+    const path = normalizeModulePath(file.name);
+    if (isCssFile(path)) {
+      const basename = getModuleBasename(path);
+      cssBasenameCounts.set(basename, (cssBasenameCounts.get(basename) ?? 0) + 1);
+      continue;
+    }
+    if (path.endsWith(".js")) {
+      const basename = getModuleBasename(path);
+      moduleBasenameCounts.set(basename, (moduleBasenameCounts.get(basename) ?? 0) + 1);
+    }
+  }
 
   for (const file of files) {
     const path = normalizeModulePath(file.name);
     if (isCssFile(path)) {
       cssSources.set(path, { path, source: file.content });
-      cssSources.set(getModuleBasename(path), { path, source: file.content });
+      const basename = getModuleBasename(path);
+      if (cssBasenameCounts.get(basename) === 1) {
+        cssSources.set(basename, { path, source: file.content });
+      }
       continue;
     }
     if (!path.endsWith(".js")) {
@@ -161,7 +179,10 @@ function createAddonModuleRegistry(code: string, files: SandboxAddonFile[] = [])
     }
     const source = stripSourceMapReferences(file.content);
     sources.set(path, { path, source });
-    sources.set(getModuleBasename(path), { path, source });
+    const basename = getModuleBasename(path);
+    if (moduleBasenameCounts.get(basename) === 1) {
+      sources.set(basename, { path, source });
+    }
   }
 
   sources.set(mainPath, { path: mainPath, source: stripSourceMapReferences(code) });
@@ -232,13 +253,24 @@ function rewriteStaticImportSpecifiers(
   code: string,
   resolveSpecifier: ModuleSpecifierResolver,
 ) {
-  return code.replace(
-    /(\b(?:import|export)\s+(?:[^'"]*?\s+from\s*)?)(["'])([^"']+)\2/g,
+  const rewrite = (match: string, prefix: string, quote: string, specifier: string) => {
+    if (!isHostDependencySpecifier(specifier) && !specifier.startsWith(".")) {
+      return match;
+    }
+    return `${prefix}${quote}${resolveSpecifier(importerPath, specifier)}${quote}`;
+  };
+
+  const withFromImports = code.replace(
+    /(\b(?:import|export)\s*[^'"]*?\bfrom\s*)(["'])([^"']+)\2/g,
     (match, prefix: string, quote: string, specifier: string) => {
-      if (!isHostDependencySpecifier(specifier) && !specifier.startsWith(".")) {
-        return match;
-      }
-      return `${prefix}${quote}${resolveSpecifier(importerPath, specifier)}${quote}`;
+      return rewrite(match, prefix, quote, specifier);
+    },
+  );
+
+  return withFromImports.replace(
+    /(\bimport\s*)(["'])([^"']+)\2/g,
+    (match, prefix: string, quote: string, specifier: string) => {
+      return rewrite(match, prefix, quote, specifier);
     },
   );
 }
@@ -500,9 +532,11 @@ function createContext() {
         } else {
           throw new Error("Sandboxed addon routes must provide render(context) or component");
         }
-        callHost("router.add", { route: normalizedRoute }).catch((error: unknown) =>
-          console.error(error),
-        );
+        return callHost("router.add", { route: normalizedRoute }).catch((error: unknown) => {
+          routes.delete(normalizedRoute.routeId);
+          console.error(error);
+          throw error;
+        });
       },
     },
     onDisable(callback: unknown) {
@@ -644,16 +678,22 @@ window.addEventListener("message", (event: MessageEvent<SandboxMessage>) => {
 
   void (async () => {
     try {
-      if (message.type === "loadAddon" && typeof message.code === "string") {
+      if (message.type === "disable") {
+        try {
+          await disableAddon();
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          post("runtimeError", { error: errorMessage });
+        } finally {
+          post("disabled");
+        }
+      } else if (message.type === "loadAddon" && typeof message.code === "string") {
         applyHostTheme(message.theme);
         await loadAddon(message.code, message.files);
         post("loaded");
       } else if (message.type === "renderRoute" && message.routeId && message.location) {
         await renderRoute(message.routeId, message.location);
         post("routeRendered", { requestId: message.requestId });
-      } else if (message.type === "disable") {
-        await disableAddon();
-        post("disabled");
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

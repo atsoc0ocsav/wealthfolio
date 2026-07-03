@@ -2,7 +2,8 @@ use crate::{context::ServiceContext, secret_store::KeyringSecretStore};
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 use wealthfolio_core::secrets::{
-    addon_secret_service_id, validate_unscoped_secret_service_id, SecretStore,
+    addon_secret_service_id, legacy_addon_secret_service_id, validate_unscoped_secret_service_id,
+    SecretStore,
 };
 
 #[tauri::command]
@@ -48,8 +49,12 @@ pub async fn set_addon_secret(
     _state: State<'_, Arc<ServiceContext>>,
 ) -> Result<(), String> {
     let service_id = addon_secret_service_id(&addon_id, &key)?;
+    let legacy_service_id = legacy_addon_secret_service_id(&addon_id, &key)?;
     KeyringSecretStore
         .set_secret(&service_id, &secret)
+        .map_err(|e| e.to_string())?;
+    KeyringSecretStore
+        .delete_secret(&legacy_service_id)
         .map_err(|e| e.to_string())
 }
 
@@ -61,9 +66,26 @@ pub async fn get_addon_secret(
     _state: State<'_, Arc<ServiceContext>>,
 ) -> Result<Option<String>, String> {
     let service_id = addon_secret_service_id(&addon_id, &key)?;
-    KeyringSecretStore
+    if let Some(secret) = KeyringSecretStore
         .get_secret(&service_id)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(Some(secret));
+    }
+
+    let legacy_service_id = legacy_addon_secret_service_id(&addon_id, &key)?;
+    let legacy_secret = KeyringSecretStore
+        .get_secret(&legacy_service_id)
+        .map_err(|e| e.to_string())?;
+    if let Some(secret) = legacy_secret.as_deref() {
+        KeyringSecretStore
+            .set_secret(&service_id, secret)
+            .map_err(|e| e.to_string())?;
+        KeyringSecretStore
+            .delete_secret(&legacy_service_id)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(legacy_secret)
 }
 
 #[tauri::command]
@@ -74,7 +96,11 @@ pub async fn delete_addon_secret(
     _state: State<'_, Arc<ServiceContext>>,
 ) -> Result<(), String> {
     let service_id = addon_secret_service_id(&addon_id, &key)?;
+    let legacy_service_id = legacy_addon_secret_service_id(&addon_id, &key)?;
     KeyringSecretStore
         .delete_secret(&service_id)
+        .map_err(|e| e.to_string())?;
+    KeyringSecretStore
+        .delete_secret(&legacy_service_id)
         .map_err(|e| e.to_string())
 }

@@ -841,6 +841,17 @@ pub fn extract_addon_zip_internal(zip_data: Vec<u8>) -> Result<ExtractedAddon, S
 }
 
 pub fn parse_manifest_json_metadata(manifest_content: &str) -> Result<AddonManifest, String> {
+    parse_manifest_json_metadata_with_options(manifest_content, true)
+}
+
+fn parse_installed_manifest_json_metadata(manifest_content: &str) -> Result<AddonManifest, String> {
+    parse_manifest_json_metadata_with_options(manifest_content, false)
+}
+
+fn parse_manifest_json_metadata_with_options(
+    manifest_content: &str,
+    enforce_canonical_id: bool,
+) -> Result<AddonManifest, String> {
     // First, parse as a raw JSON value to handle the legacy format
     let raw_manifest: serde_json::Value = serde_json::from_str(manifest_content)
         .map_err(|e| format!("Invalid manifest.json: {}", e))?;
@@ -929,7 +940,11 @@ pub fn parse_manifest_json_metadata(manifest_content: &str) -> Result<AddonManif
     if main.is_none() {
         return Err("Missing 'main' field in manifest.json".to_string());
     }
-    validate_addon_id(&id)?;
+    if enforce_canonical_id {
+        validate_addon_id(&id)?;
+    } else {
+        validate_addon_id(&id.to_ascii_lowercase())?;
+    }
     if let Some(main_path) = &main {
         validated_addon_archive_path(main_path)?;
     }
@@ -1697,7 +1712,7 @@ impl AddonService {
         }
         let content = fs::read_to_string(&manifest_path)
             .map_err(|e| format!("Failed to read manifest {}: {}", manifest_path.display(), e))?;
-        let manifest = parse_manifest_json_metadata(&content).map_err(|e| {
+        let manifest = parse_installed_manifest_json_metadata(&content).map_err(|e| {
             format!(
                 "Failed to parse manifest {}: {}",
                 manifest_path.display(),
@@ -1710,6 +1725,44 @@ impl AddonService {
     fn read_manifest_or_error(&self, addon_dir: &Path) -> Result<AddonManifest, String> {
         self.read_manifest_if_exists(addon_dir)?
             .ok_or_else(|| format!("Addon manifest not found in {}", addon_dir.display()))
+    }
+
+    fn find_installed_addon_dir_by_manifest_id(&self, addon_id: &str) -> Result<PathBuf, String> {
+        let addons_dir = ensure_addons_directory(&self.addons_root)?;
+        for entry in fs::read_dir(&addons_dir)
+            .map_err(|e| format!("Failed to read addons directory: {}", e))?
+        {
+            let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+            let dir = entry.path();
+            if !dir.is_dir() || Self::is_hidden_addon_dir(&dir) {
+                continue;
+            }
+            let manifest = match self.read_manifest_if_exists(&dir) {
+                Ok(Some(manifest)) => manifest,
+                Ok(None) => continue,
+                Err(err) => {
+                    log::warn!("Skipping invalid addon manifest in {:?}: {}", dir, err);
+                    continue;
+                }
+            };
+            if manifest.id == addon_id {
+                return Ok(dir);
+            }
+        }
+
+        Err("Addon not found".to_string())
+    }
+
+    fn existing_addon_dir(&self, addon_id: &str) -> Result<PathBuf, String> {
+        if validate_addon_id(addon_id).is_ok() {
+            self.recover_incomplete_replacement_for_addon(addon_id)?;
+            let addon_dir = get_addon_path(&self.addons_root, addon_id)?;
+            if addon_dir.exists() {
+                return Ok(addon_dir);
+            }
+        }
+
+        self.find_installed_addon_dir_by_manifest_id(addon_id)
     }
 
     fn write_addon_archive_files(
@@ -1914,8 +1967,7 @@ impl AddonService {
     }
 
     fn enabled_manifest_for_addon(&self, addon_id: &str) -> Result<AddonManifest, String> {
-        self.recover_incomplete_replacement_for_addon(addon_id)?;
-        let addon_dir = get_addon_path(&self.addons_root, addon_id)?;
+        let addon_dir = self.existing_addon_dir(addon_id)?;
         let manifest = self.read_manifest_or_error(&addon_dir)?;
         if !manifest.is_enabled() {
             return Err("Addon is disabled".to_string());
@@ -2179,8 +2231,7 @@ impl AddonServiceTrait for AddonService {
     }
 
     async fn uninstall_addon(&self, addon_id: &str) -> Result<(), String> {
-        self.recover_incomplete_replacement_for_addon(addon_id)?;
-        let addon_dir = get_addon_path(&self.addons_root, addon_id)?;
+        let addon_dir = self.existing_addon_dir(addon_id)?;
         if !addon_dir.exists() {
             return Err("Addon not found".to_string());
         }
@@ -2228,8 +2279,7 @@ impl AddonServiceTrait for AddonService {
     }
 
     fn load_addon_for_runtime(&self, addon_id: &str) -> Result<ExtractedAddon, String> {
-        self.recover_incomplete_replacement_for_addon(addon_id)?;
-        let addon_dir = get_addon_path(&self.addons_root, addon_id)?;
+        let addon_dir = self.existing_addon_dir(addon_id)?;
         let manifest = self.read_manifest_or_error(&addon_dir)?;
 
         if !manifest.is_enabled() {
@@ -2273,8 +2323,7 @@ impl AddonServiceTrait for AddonService {
     }
 
     async fn check_addon_update(&self, addon_id: &str) -> Result<AddonUpdateCheckResult, String> {
-        self.recover_incomplete_replacement_for_addon(addon_id)?;
-        let addon_dir = get_addon_path(&self.addons_root, addon_id)?;
+        let addon_dir = self.existing_addon_dir(addon_id)?;
         let manifest = self.read_manifest_or_error(&addon_dir)?;
         check_addon_update_from_api(addon_id, &manifest.version, Some(&self.instance_id)).await
     }
@@ -2340,8 +2389,7 @@ impl AddonServiceTrait for AddonService {
     }
 
     async fn update_addon_from_store(&self, addon_id: &str) -> Result<AddonManifest, String> {
-        self.recover_incomplete_replacement_for_addon(addon_id)?;
-        let addon_dir = get_addon_path(&self.addons_root, addon_id)?;
+        let addon_dir = self.existing_addon_dir(addon_id)?;
         let previous_manifest = self.read_manifest_if_exists(&addon_dir)?;
         let was_enabled = previous_manifest
             .as_ref()
@@ -2396,7 +2444,7 @@ impl AddonServiceTrait for AddonService {
     }
 
     fn toggle_addon(&self, addon_id: &str, enabled: bool) -> Result<(), String> {
-        let addon_dir = get_addon_path(&self.addons_root, addon_id)?;
+        let addon_dir = self.existing_addon_dir(addon_id)?;
         let mut manifest = self.read_manifest_or_error(&addon_dir)?;
         manifest.enabled = Some(enabled);
         self.write_manifest(&addon_dir, &manifest)?;
