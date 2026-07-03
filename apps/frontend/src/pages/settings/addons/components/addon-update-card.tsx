@@ -7,6 +7,7 @@ import { Icons } from "@wealthfolio/ui/components/ui/icons";
 import { useToast } from "@wealthfolio/ui/components/ui/use-toast";
 import type { AddonUpdateInfo } from "@wealthfolio/addon-sdk";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 interface AddonUpdateCardProps {
   addonId: string;
@@ -23,6 +24,7 @@ export function AddonUpdateCard({
   onUpdateComplete,
   disabled = false,
 }: AddonUpdateCardProps) {
+  const { t } = useTranslation();
   const [isUpdating, setIsUpdating] = useState(false);
   const { toast } = useToast();
   const addonDetailUrl = `https://wealthfolio.app/addons/${encodeURIComponent(addonId)}`;
@@ -30,8 +32,8 @@ export function AddonUpdateCard({
   const handleUpdate = async () => {
     if (!updateInfo.downloadUrl) {
       toast({
-        title: "Update not available",
-        description: "No download URL available for this update.",
+        title: t("settings:addon_update_not_available"),
+        description: t("settings:addon_update_no_url"),
         variant: "destructive",
       });
       return;
@@ -46,16 +48,20 @@ export function AddonUpdateCard({
       await reloadAllAddons();
 
       toast({
-        title: "Update successful",
-        description: `${addonName} has been updated to version ${updateInfo.latestVersion}.`,
+        title: t("settings:addon_update_successful"),
+        description: t("settings:addon_update_success_message", {
+          name: addonName,
+          version: updateInfo.latestVersion,
+        }),
       });
 
       onUpdateComplete?.();
     } catch (error) {
       console.error("Error updating addon:", error);
       toast({
-        title: "Update failed",
-        description: error instanceof Error ? error.message : "Failed to update addon",
+        title: t("settings:addon_update_failed"),
+        description:
+          error instanceof Error ? error.message : t("settings:addon_update_failed_fallback"),
         variant: "destructive",
       });
     } finally {
@@ -70,8 +76,8 @@ export function AddonUpdateCard({
   };
 
   const getUpdateBadgeText = () => {
-    if (updateInfo.isCritical) return "Critical Update";
-    if (updateInfo.hasBreakingChanges) return "Breaking Changes";
+    if (updateInfo.isCritical) return t("settings:addon_update_critical");
+    if (updateInfo.hasBreakingChanges) return t("settings:addon_update_breaking");
     return null; // Don't show badge for regular updates
   };
 
@@ -85,7 +91,9 @@ export function AddonUpdateCard({
         <div className="flex-1 space-y-2">
           <div className="flex items-center gap-2">
             <Icons.ArrowUp className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-            <h4 className="font-medium text-amber-900 dark:text-amber-100">Update Available</h4>
+            <h4 className="font-medium text-amber-900 dark:text-amber-100">
+              {t("settings:addon_update_available")}
+            </h4>
             {getUpdateBadgeText() && (
               <Badge variant={getUpdateBadgeVariant()} className="text-xs">
                 {getUpdateBadgeText()}
@@ -100,7 +108,9 @@ export function AddonUpdateCard({
             </p>
             {updateInfo.releaseDate && (
               <p className="text-xs opacity-80">
-                Released: {new Date(updateInfo.releaseDate).toLocaleDateString()}
+                {t("settings:addon_update_released", {
+                  date: new Date(updateInfo.releaseDate).toLocaleDateString(),
+                })}
               </p>
             )}
           </div>
@@ -118,7 +128,7 @@ export function AddonUpdateCard({
               <ExternalLink href={addonDetailUrl}>
                 <span className="inline-flex items-center">
                   <Icons.FileText className="mr-1 h-3 w-3" />
-                  Release Notes
+                  {t("settings:addon_update_release_notes")}
                 </span>
               </ExternalLink>
             </Button>
@@ -128,12 +138,12 @@ export function AddonUpdateCard({
             {isUpdating ? (
               <>
                 <Icons.Loader className="mr-1 h-3 w-3 animate-spin" />
-                Updating...
+                {t("settings:addon_update_updating")}
               </>
             ) : (
               <>
                 <Icons.Download className="mr-1 h-3 w-3" />
-                Update
+                {t("settings:addon_update_update_button")}
               </>
             )}
           </Button>
@@ -144,7 +154,7 @@ export function AddonUpdateCard({
         <div className="mt-3 rounded-md bg-amber-100 p-2 dark:bg-amber-900/20">
           <p className="text-xs text-amber-800 dark:text-amber-200">
             <Icons.Info className="mr-1 inline h-3 w-3" />
-            Requires Wealthfolio {updateInfo.minWealthfolioVersion} or later
+            {t("settings:addon_update_requires", { version: updateInfo.minWealthfolioVersion })}
           </p>
         </div>
       )}
