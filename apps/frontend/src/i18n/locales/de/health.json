@@ -1,0 +1,84 @@
+{
+  "page": {
+    "heading": "Datenzustand",
+    "text": "Datenqualitätsprobleme erkennen und beheben"
+  },
+  "severity": {
+    "info": "Info",
+    "warning": "Warnung",
+    "error": "Fehler",
+    "critical": "Kritisch"
+  },
+  "category": {
+    "prices": "Kurse",
+    "fxRates": "Wechselkurse",
+    "categories": "Kategorien",
+    "data": "Daten",
+    "accounts": "Konten",
+    "settings": "Einstellungen"
+  },
+  "actions": {
+    "fix": "Beheben",
+    "clear": "Zurücksetzen"
+  },
+  "updatedAt": "Aktualisiert um {{time}}",
+  "healthy": {
+    "title": "Ihre Daten sehen gut aus",
+    "description": "Keine Probleme gefunden. Ihre Portfoliodaten sind konsistent und aktuell."
+  },
+  "loadError": {
+    "title": "Zustandsstatus konnte nicht geladen werden"
+  },
+  "detail": {
+    "categories": {
+      "priceStaleness": {
+        "label": "Veraltete Kurse",
+        "description": "Die Marktkurse sind veraltet und müssen aktualisiert werden. Dies kann die Genauigkeit Ihrer Portfoliobewertung beeinträchtigen."
+      },
+      "fxIntegrity": {
+        "label": "Wechselkurse",
+        "description": "Fehlende oder veraltete Wechselkurse für die Währungsumrechnung. Dies kann Berechnungen für Mehrwährungsportfolios beeinträchtigen."
+      },
+      "classification": {
+        "label": "Klassifizierung",
+        "description": "Bei einigen Anlagen fehlen Kategorien oder Klassifizierungen. Dies beeinflusst die Portfolioaufschlüsselung und die Allokationsanalyse."
+      },
+      "dataConsistency": {
+        "label": "Datenkonsistenz",
+        "description": "In den Portfoliodaten wurden Inkonsistenzen festgestellt. Dies kann zu ungenauen Berichten oder Berechnungen führen."
+      },
+      "accountConfiguration": {
+        "label": "Kontoeinrichtung",
+        "description": "Einige Konten müssen konfiguriert werden, bevor Daten synchronisiert werden können. Legen Sie den Tracking-Modus fest, um mit dem Datenimport zu beginnen."
+      },
+      "settingsConfiguration": {
+        "label": "Einstellungen",
+        "description": "Einige Anwendungseinstellungen erfordern Ihre Aufmerksamkeit, damit die Daten korrekt interpretiert werden."
+      },
+      "timezoneMissing": {
+        "label": "Zeitzoneneinstellungen",
+        "description": "Die Zeitzone Ihrer App ist nicht konfiguriert. Bis Sie sie festlegen, stimmen die angezeigten Daten möglicherweise nicht mit Ihrer Region überein."
+      },
+      "timezoneInvalid": {
+        "label": "Zeitzoneneinstellungen",
+        "description": "Ihre konfigurierte Zeitzone ist ungültig. Aktualisieren Sie sie in den allgemeinen Einstellungen, um eine konsistente Datumsbehandlung wiederherzustellen."
+      },
+      "timezoneMismatch": {
+        "label": "Zeitzoneneinstellungen",
+        "description": "Ihre Browser-Zeitzone weicht von der konfigurierten App-Zeitzone ab. Portfoliodaten richten sich nach der konfigurierten Zeitzone."
+      }
+    },
+    "affectedItems": "Betroffene Elemente ({{count}})",
+    "impact": "Auswirkung",
+    "affectedItemsCount": "Betroffene Elemente",
+    "portfolioImpact": "Portfolio-Auswirkung",
+    "details": "Details",
+    "aboutThisIssue": "Über dieses Problem",
+    "dismiss": "Ausblenden",
+    "dismissConfirm": {
+      "title": "Dieses Problem ausblenden?",
+      "message": "Dadurch wird das Problem in Ihrem Zustandscenter ausgeblendet. Es erscheint erneut, wenn sich die zugrunde liegenden Daten ändern.",
+      "pendingText": "Wird ausgeblendet..."
+    }
+  }
+}

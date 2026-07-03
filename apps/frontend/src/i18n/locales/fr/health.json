@@ -1,0 +1,84 @@
+{
+  "page": {
+    "heading": "Santé des données",
+    "text": "Identifiez et résolvez les problèmes de qualité des données"
+  },
+  "severity": {
+    "info": "Info",
+    "warning": "Avertissement",
+    "error": "Erreur",
+    "critical": "Critique"
+  },
+  "category": {
+    "prices": "Cours",
+    "fxRates": "Taux de change",
+    "categories": "Catégories",
+    "data": "Données",
+    "accounts": "Comptes",
+    "settings": "Paramètres"
+  },
+  "actions": {
+    "fix": "Corriger",
+    "clear": "Effacer"
+  },
+  "updatedAt": "Mis à jour à {{time}}",
+  "healthy": {
+    "title": "Vos données sont en parfait état",
+    "description": "Aucun problème détecté. Les données de votre portefeuille sont cohérentes et à jour."
+  },
+  "loadError": {
+    "title": "Échec du chargement de l'état de santé"
+  },
+  "detail": {
+    "categories": {
+      "priceStaleness": {
+        "label": "Cours obsolètes",
+        "description": "Les cours du marché sont obsolètes et doivent être actualisés. Cela peut affecter l'exactitude de la valorisation de votre portefeuille."
+      },
+      "fxIntegrity": {
+        "label": "Taux de change",
+        "description": "Taux de change manquants ou obsolètes pour la conversion des devises. Cela peut affecter les calculs de portefeuille multidevises."
+      },
+      "classification": {
+        "label": "Classification",
+        "description": "Certains actifs n'ont pas de catégories ou de classifications. Cela affecte la répartition du portefeuille et l'analyse d'allocation."
+      },
+      "dataConsistency": {
+        "label": "Cohérence des données",
+        "description": "Des incohérences ont été détectées dans les données du portefeuille. Cela peut entraîner des rapports ou des calculs inexacts."
+      },
+      "accountConfiguration": {
+        "label": "Configuration du compte",
+        "description": "Certains comptes doivent être configurés avant que les données puissent être synchronisées. Définissez le mode de suivi pour commencer à importer les données."
+      },
+      "settingsConfiguration": {
+        "label": "Paramètres",
+        "description": "Certains paramètres de l'application nécessitent votre attention pour que les données soient interprétées correctement."
+      },
+      "timezoneMissing": {
+        "label": "Paramètres de fuseau horaire",
+        "description": "Le fuseau horaire de votre application n'est pas configuré. Tant que vous ne l'aurez pas défini, les dates affichées peuvent ne pas correspondre à votre région."
+      },
+      "timezoneInvalid": {
+        "label": "Paramètres de fuseau horaire",
+        "description": "Le fuseau horaire configuré est invalide. Mettez-le à jour dans les paramètres généraux pour rétablir une gestion cohérente des dates."
+      },
+      "timezoneMismatch": {
+        "label": "Paramètres de fuseau horaire",
+        "description": "Le fuseau horaire de votre navigateur diffère du fuseau horaire configuré de l'application. Les dates du portefeuille suivent le fuseau horaire configuré."
+      }
+    },
+    "affectedItems": "Éléments concernés ({{count}})",
+    "impact": "Impact",
+    "affectedItemsCount": "Éléments concernés",
+    "portfolioImpact": "Impact sur le portefeuille",
+    "details": "Détails",
+    "aboutThisIssue": "À propos de ce problème",
+    "dismiss": "Ignorer",
+    "dismissConfirm": {
+      "title": "Ignorer ce problème ?",
+      "message": "Cela masquera le problème de votre centre de santé. Il réapparaîtra si les données sous-jacentes changent.",
+      "pendingText": "Masquage en cours..."
+    }
+  }
+}

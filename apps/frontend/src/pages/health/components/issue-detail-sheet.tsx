@@ -11,6 +11,7 @@ import {
   SheetTitle,
 } from "@wealthfolio/ui";
 import { cn } from "@wealthfolio/ui/lib/utils";
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 interface IssueDetailSheetProps {
@@ -23,76 +24,70 @@ interface IssueDetailSheetProps {
   isFixing: boolean;
 }
 
-const SEVERITY_CONFIG: Record<HealthSeverity, { label: string; color: string }> = {
-  INFO: { label: "Info", color: "text-muted-foreground" },
-  WARNING: { label: "Warning", color: "text-yellow-600 dark:text-yellow-400" },
-  ERROR: { label: "Error", color: "text-destructive" },
-  CRITICAL: { label: "Critical", color: "text-destructive" },
+const SEVERITY_CONFIG: Record<HealthSeverity, { labelKey: string; color: string }> = {
+  INFO: { labelKey: "health:severity.info", color: "text-muted-foreground" },
+  WARNING: { labelKey: "health:severity.warning", color: "text-yellow-600 dark:text-yellow-400" },
+  ERROR: { labelKey: "health:severity.error", color: "text-destructive" },
+  CRITICAL: { labelKey: "health:severity.critical", color: "text-destructive" },
 };
 
-const CATEGORY_LABELS: Record<HealthCategory, { label: string; description: string }> = {
+const CATEGORY_LABEL_KEYS: Record<HealthCategory, { labelKey: string; descriptionKey: string }> = {
   PRICE_STALENESS: {
-    label: "Price Staleness",
-    description:
-      "Market prices are outdated and need to be refreshed. This can affect the accuracy of your portfolio valuation.",
+    labelKey: "health:detail.categories.priceStaleness.label",
+    descriptionKey: "health:detail.categories.priceStaleness.description",
   },
   FX_INTEGRITY: {
-    label: "Exchange Rates",
-    description:
-      "Missing or outdated exchange rates for currency conversion. This may impact multi-currency portfolio calculations.",
+    labelKey: "health:detail.categories.fxIntegrity.label",
+    descriptionKey: "health:detail.categories.fxIntegrity.description",
   },
   CLASSIFICATION: {
-    label: "Classification",
-    description:
-      "Assets are missing categories or classifications. This affects portfolio breakdowns and allocation analysis.",
+    labelKey: "health:detail.categories.classification.label",
+    descriptionKey: "health:detail.categories.classification.description",
   },
   DATA_CONSISTENCY: {
-    label: "Data Consistency",
-    description:
-      "Inconsistencies detected in portfolio data. This may cause inaccurate reporting or calculations.",
+    labelKey: "health:detail.categories.dataConsistency.label",
+    descriptionKey: "health:detail.categories.dataConsistency.description",
   },
   ACCOUNT_CONFIGURATION: {
-    label: "Account Setup",
-    description:
-      "Some accounts need configuration before data can be synced. Set tracking mode to start importing data.",
+    labelKey: "health:detail.categories.accountConfiguration.label",
+    descriptionKey: "health:detail.categories.accountConfiguration.description",
   },
   SETTINGS_CONFIGURATION: {
-    label: "Settings",
-    description:
-      "Some application settings need attention to ensure data is interpreted correctly.",
+    labelKey: "health:detail.categories.settingsConfiguration.label",
+    descriptionKey: "health:detail.categories.settingsConfiguration.description",
   },
 };
 
-function getCategoryConfigForIssue(issue: HealthIssue): { label: string; description: string } {
+function getCategoryConfigKeysForIssue(issue: HealthIssue): {
+  labelKey: string;
+  descriptionKey: string;
+} {
   if (issue.category !== "SETTINGS_CONFIGURATION") {
-    return CATEGORY_LABELS[issue.category];
+    return CATEGORY_LABEL_KEYS[issue.category];
   }
 
   if (issue.id.startsWith("timezone_missing:")) {
     return {
-      label: "Timezone Settings",
-      description:
-        "Your app timezone is not configured. Until you set it, user-facing dates may not match your locale.",
+      labelKey: "health:detail.categories.timezoneMissing.label",
+      descriptionKey: "health:detail.categories.timezoneMissing.description",
     };
   }
 
   if (issue.id.startsWith("timezone_invalid:")) {
     return {
-      label: "Timezone Settings",
-      description:
-        "Your configured timezone is invalid. Update it in General settings to restore consistent date handling.",
+      labelKey: "health:detail.categories.timezoneInvalid.label",
+      descriptionKey: "health:detail.categories.timezoneInvalid.description",
     };
   }
 
   if (issue.id.startsWith("timezone_mismatch:")) {
     return {
-      label: "Timezone Settings",
-      description:
-        "Your browser timezone differs from the configured app timezone. Portfolio dates follow the configured timezone.",
+      labelKey: "health:detail.categories.timezoneMismatch.label",
+      descriptionKey: "health:detail.categories.timezoneMismatch.description",
     };
   }
 
-  return CATEGORY_LABELS.SETTINGS_CONFIGURATION;
+  return CATEGORY_LABEL_KEYS.SETTINGS_CONFIGURATION;
 }
 
 function buildNavigateActionRoute(
@@ -126,10 +121,11 @@ export function IssueDetailSheet({
   isDismissing,
   isFixing,
 }: IssueDetailSheetProps) {
+  const { t } = useTranslation();
   if (!issue) return null;
 
   const severityConfig = SEVERITY_CONFIG[issue.severity];
-  const categoryConfig = getCategoryConfigForIssue(issue);
+  const categoryConfigKeys = getCategoryConfigKeysForIssue(issue);
   const navigateActionRoute = buildNavigateActionRoute(issue.navigateAction);
   const detailItems =
     issue.details
@@ -142,9 +138,11 @@ export function IssueDetailSheet({
       <SheetContent side="right" className="flex w-full flex-col sm:max-w-xl lg:max-w-2xl">
         <SheetHeader className="shrink-0 space-y-3 pb-6">
           <div className="flex items-center gap-2 text-xs">
-            <span className={cn("font-medium", severityConfig.color)}>{severityConfig.label}</span>
+            <span className={cn("font-medium", severityConfig.color)}>
+              {t(severityConfig.labelKey)}
+            </span>
             <span className="text-muted-foreground">·</span>
-            <span className="text-muted-foreground">{categoryConfig.label}</span>
+            <span className="text-muted-foreground">{t(categoryConfigKeys.labelKey)}</span>
           </div>
           <SheetTitle className="text-xl leading-tight">{issue.title}</SheetTitle>
           <p className="text-muted-foreground text-sm leading-relaxed">{issue.message}</p>
@@ -155,7 +153,7 @@ export function IssueDetailSheet({
             {issue.affectedItems && issue.affectedItems.length > 0 && (
               <div className="space-y-3">
                 <h4 className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-                  Affected Items ({issue.affectedItems.length})
+                  {t("health:detail.affectedItems", { count: issue.affectedItems.length })}
                 </h4>
                 <div className="rounded-md border p-1">
                   {issue.affectedItems.map((item) => (
@@ -196,13 +194,15 @@ export function IssueDetailSheet({
               !issue.affectedItems && (
                 <div className="space-y-3">
                   <h4 className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-                    Impact
+                    {t("health:detail.impact")}
                   </h4>
                   <div className="grid grid-cols-2 gap-4">
                     {issue.affectedCount > 0 && (
                       <div>
                         <p className="text-2xl font-semibold tabular-nums">{issue.affectedCount}</p>
-                        <p className="text-muted-foreground text-xs">Affected items</p>
+                        <p className="text-muted-foreground text-xs">
+                          {t("health:detail.affectedItemsCount")}
+                        </p>
                       </div>
                     )}
                     {issue.affectedMvPct != null && issue.affectedMvPct > 0 && (
@@ -210,7 +210,9 @@ export function IssueDetailSheet({
                         <p className="text-2xl font-semibold tabular-nums">
                           {(issue.affectedMvPct * 100).toFixed(1)}%
                         </p>
-                        <p className="text-muted-foreground text-xs">Portfolio impact</p>
+                        <p className="text-muted-foreground text-xs">
+                          {t("health:detail.portfolioImpact")}
+                        </p>
                       </div>
                     )}
                   </div>
@@ -220,7 +222,7 @@ export function IssueDetailSheet({
             {detailItems.length > 0 && (
               <div className="space-y-2">
                 <h4 className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-                  Details
+                  {t("health:detail.details")}
                 </h4>
                 <div className="space-y-2">
                   {detailItems.map((detail, index) => {
@@ -281,9 +283,11 @@ export function IssueDetailSheet({
 
             <div className="space-y-2 border-t pt-6">
               <h4 className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-                About this issue
+                {t("health:detail.aboutThisIssue")}
               </h4>
-              <p className="text-muted-foreground text-sm">{categoryConfig.description}</p>
+              <p className="text-muted-foreground text-sm">
+                {t(categoryConfigKeys.descriptionKey)}
+              </p>
             </div>
           </div>
         </ScrollArea>
@@ -310,17 +314,17 @@ export function IssueDetailSheet({
           )}
 
           <ActionConfirm
-            confirmTitle="Dismiss this issue?"
-            confirmMessage="This will hide the issue from your health center. It will reappear if the underlying data changes."
-            confirmButtonText="Dismiss"
+            confirmTitle={t("health:detail.dismissConfirm.title")}
+            confirmMessage={t("health:detail.dismissConfirm.message")}
+            confirmButtonText={t("health:detail.dismiss")}
             confirmButtonVariant="default"
             handleConfirm={onDismiss}
             isPending={isDismissing}
-            pendingText="Dismissing..."
+            pendingText={t("health:detail.dismissConfirm.pendingText")}
             button={
               <Button variant="ghost" className="text-muted-foreground w-full">
                 <Icons.EyeOff className="mr-2 h-4 w-4" />
-                Dismiss
+                {t("health:detail.dismiss")}
               </Button>
             }
           />

@@ -20,7 +20,7 @@ describe("getCategoryConfig", () => {
       id: "timezone_missing:abc123",
     });
 
-    expect(category.label).toBe("Settings");
+    expect(category.labelKey).toBe("health:category.settings");
     expect(category.icon).toBe("Settings");
   });
 
@@ -31,7 +31,7 @@ describe("getCategoryConfig", () => {
       id: "account_tracking_mode:abc123",
     });
 
-    expect(category.label).toBe("Accounts");
+    expect(category.labelKey).toBe("health:category.accounts");
     expect(category.icon).toBe("Settings");
   });
 });

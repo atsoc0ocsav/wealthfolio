@@ -12,18 +12,24 @@ import {
 } from "@wealthfolio/ui/components/ui/form";
 import { Input } from "@wealthfolio/ui/components/ui/input";
 import { worldCurrencies } from "@wealthfolio/ui/lib/currencies";
+import type { TFunction } from "i18next";
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import * as z from "zod";
 
-const onboardingSettingsSchema = z.object({
-  baseCurrency: z
-    .string({ required_error: "Please select a base currency." })
-    .min(1, "Please select a base currency."),
-  timezone: z
-    .string({ required_error: "Please select a timezone." })
-    .min(1, "Please select a timezone."),
-});
+function createOnboardingSettingsSchema(t: TFunction) {
+  return z.object({
+    baseCurrency: z
+      .string({ required_error: t("onboarding:steps.preferences.currencyRequired") })
+      .min(1, t("onboarding:steps.preferences.currencyRequired")),
+    timezone: z
+      .string({ required_error: t("onboarding:steps.preferences.timezoneRequired") })
+      .min(1, t("onboarding:steps.preferences.timezoneRequired")),
+  });
+}
+
+type OnboardingSettingsSchema = ReturnType<typeof createOnboardingSettingsSchema>;
 
 function detectDefaultCurrency(): string | undefined {
   if (typeof navigator === "undefined") return undefined; // Default SSR/Node
@@ -105,7 +111,7 @@ const popularTimezones = [
   "Australia/Sydney",
 ];
 
-type OnboardingSettingsValues = z.infer<typeof onboardingSettingsSchema>;
+type OnboardingSettingsValues = z.infer<OnboardingSettingsSchema>;
 
 export interface OnboardingStep2Handle {
   submitForm: () => void;
@@ -118,7 +124,9 @@ interface OnboardingStep2Props {
 
 export const OnboardingStep2 = forwardRef<OnboardingStep2Handle, OnboardingStep2Props>(
   ({ onNext, onValidityChange }, ref) => {
+    const { t } = useTranslation();
     const { settings, updateSettings } = useSettingsContext();
+    const onboardingSettingsSchema = useMemo(() => createOnboardingSettingsSchema(t), [t]);
     const [initialValuesSet, setInitialValuesSet] = useState(false);
     const [showCurrencySearch, setShowCurrencySearch] = useState(false);
     const [currencySearch, setCurrencySearch] = useState("");
@@ -216,7 +224,7 @@ export const OnboardingStep2 = forwardRef<OnboardingStep2Handle, OnboardingStep2
       <>
         <div className="w-full max-w-2xl space-y-4">
           <div className="text-center">
-            <p className="text-muted-foreground">Just a couple preferences to get you started</p>
+            <p className="text-muted-foreground">{t("onboarding:steps.preferences.subtitle")}</p>
           </div>
           <Card className="border-none bg-transparent">
             <CardContent className="p-0 sm:p-6">
@@ -231,7 +239,9 @@ export const OnboardingStep2 = forwardRef<OnboardingStep2Handle, OnboardingStep2
                           <div className="bg-muted rounded-lg p-2">
                             <Icons.DollarSign className="text-muted-foreground h-5 w-5" />
                           </div>
-                          <FormLabel className="text-xl font-semibold">Currency</FormLabel>
+                          <FormLabel className="text-xl font-semibold">
+                            {t("onboarding:steps.preferences.currencyLabel")}
+                          </FormLabel>
                         </div>
                         <FormControl>
                           <div className="grid grid-cols-3 gap-3 md:grid-cols-4">
@@ -258,7 +268,7 @@ export const OnboardingStep2 = forwardRef<OnboardingStep2Handle, OnboardingStep2
                               className="border-border hover:border-primary/50 hover:bg-accent ring-offset-background focus-visible:ring-ring inline-flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-lg border-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0"
                             >
                               <Icons.Search className="size-5" />
-                              Other
+                              {t("onboarding:steps.preferences.other")}
                             </button>
                           </div>
                         </FormControl>
@@ -276,7 +286,9 @@ export const OnboardingStep2 = forwardRef<OnboardingStep2Handle, OnboardingStep2
                           <div className="bg-muted rounded-lg p-2">
                             <Icons.Globe className="text-muted-foreground h-5 w-5" />
                           </div>
-                          <FormLabel className="text-xl font-semibold">Timezone</FormLabel>
+                          <FormLabel className="text-xl font-semibold">
+                            {t("onboarding:steps.preferences.timezoneLabel")}
+                          </FormLabel>
                         </div>
                         <FormControl>
                           <div className="grid grid-cols-3 gap-3 md:grid-cols-4">
@@ -305,7 +317,7 @@ export const OnboardingStep2 = forwardRef<OnboardingStep2Handle, OnboardingStep2
                               className="border-border hover:border-primary/50 hover:bg-accent ring-offset-background focus-visible:ring-ring inline-flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-lg border-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0"
                             >
                               <Icons.Search className="size-5" />
-                              Other
+                              {t("onboarding:steps.preferences.other")}
                             </button>
                           </div>
                         </FormControl>
@@ -324,7 +336,9 @@ export const OnboardingStep2 = forwardRef<OnboardingStep2Handle, OnboardingStep2
             <Card className="w-full max-w-md border shadow-lg">
               <div className="p-6">
                 <div className="mb-4 flex items-center justify-between">
-                  <h3 className="text-xl font-bold">Select Currency</h3>
+                  <h3 className="text-xl font-bold">
+                    {t("onboarding:steps.preferences.selectCurrency")}
+                  </h3>
                   <button
                     onClick={() => {
                       setShowCurrencySearch(false);
@@ -340,7 +354,7 @@ export const OnboardingStep2 = forwardRef<OnboardingStep2Handle, OnboardingStep2
                   <Icons.Search className="text-muted-foreground absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 transform" />
                   <Input
                     type="text"
-                    placeholder="Search currencies..."
+                    placeholder={t("onboarding:steps.preferences.searchCurrenciesPlaceholder")}
                     value={currencySearch}
                     onChange={(e) => setCurrencySearch(e.target.value)}
                     className="pl-10"
@@ -370,7 +384,7 @@ export const OnboardingStep2 = forwardRef<OnboardingStep2Handle, OnboardingStep2
                   ))}
                   {filteredCurrencies.length === 0 && (
                     <div className="text-muted-foreground py-8 text-center">
-                      No currencies found
+                      {t("onboarding:steps.preferences.noCurrenciesFound")}
                     </div>
                   )}
                 </div>
@@ -384,7 +398,9 @@ export const OnboardingStep2 = forwardRef<OnboardingStep2Handle, OnboardingStep2
             <Card className="w-full max-w-md border shadow-lg">
               <div className="p-6">
                 <div className="mb-4 flex items-center justify-between">
-                  <h3 className="text-xl font-bold">Select Timezone</h3>
+                  <h3 className="text-xl font-bold">
+                    {t("onboarding:steps.preferences.selectTimezone")}
+                  </h3>
                   <button
                     onClick={() => {
                       setShowTimezoneSearch(false);
@@ -400,7 +416,7 @@ export const OnboardingStep2 = forwardRef<OnboardingStep2Handle, OnboardingStep2
                   <Icons.Search className="text-muted-foreground absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 transform" />
                   <Input
                     type="text"
-                    placeholder="Search timezones..."
+                    placeholder={t("onboarding:steps.preferences.searchTimezonesPlaceholder")}
                     value={timezoneSearch}
                     onChange={(e) => setTimezoneSearch(e.target.value)}
                     className="pl-10"
@@ -429,7 +445,9 @@ export const OnboardingStep2 = forwardRef<OnboardingStep2Handle, OnboardingStep2
                     </button>
                   ))}
                   {filteredTimezones.length === 0 && (
-                    <div className="text-muted-foreground py-8 text-center">No timezones found</div>
+                    <div className="text-muted-foreground py-8 text-center">
+                      {t("onboarding:steps.preferences.noTimezonesFound")}
+                    </div>
                   )}
                 </div>
               </div>

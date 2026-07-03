@@ -1,0 +1,84 @@
+{
+  "page": {
+    "heading": "Data Health",
+    "text": "Identify and resolve data quality issues"
+  },
+  "severity": {
+    "info": "Info",
+    "warning": "Warning",
+    "error": "Error",
+    "critical": "Critical"
+  },
+  "category": {
+    "prices": "Prices",
+    "fxRates": "FX Rates",
+    "categories": "Categories",
+    "data": "Data",
+    "accounts": "Accounts",
+    "settings": "Settings"
+  },
+  "actions": {
+    "fix": "Fix",
+    "clear": "Clear"
+  },
+  "updatedAt": "Updated {{time}}",
+  "healthy": {
+    "title": "Your Data Looks Great",
+    "description": "No issues found. Your portfolio data is consistent and up to date."
+  },
+  "loadError": {
+    "title": "Failed to load health status"
+  },
+  "detail": {
+    "categories": {
+      "priceStaleness": {
+        "label": "Price Staleness",
+        "description": "Market prices are outdated and need to be refreshed. This can affect the accuracy of your portfolio valuation."
+      },
+      "fxIntegrity": {
+        "label": "Exchange Rates",
+        "description": "Missing or outdated exchange rates for currency conversion. This may impact multi-currency portfolio calculations."
+      },
+      "classification": {
+        "label": "Classification",
+        "description": "Assets are missing categories or classifications. This affects portfolio breakdowns and allocation analysis."
+      },
+      "dataConsistency": {
+        "label": "Data Consistency",
+        "description": "Inconsistencies detected in portfolio data. This may cause inaccurate reporting or calculations."
+      },
+      "accountConfiguration": {
+        "label": "Account Setup",
+        "description": "Some accounts need configuration before data can be synced. Set tracking mode to start importing data."
+      },
+      "settingsConfiguration": {
+        "label": "Settings",
+        "description": "Some application settings need attention to ensure data is interpreted correctly."
+      },
+      "timezoneMissing": {
+        "label": "Timezone Settings",
+        "description": "Your app timezone is not configured. Until you set it, user-facing dates may not match your locale."
+      },
+      "timezoneInvalid": {
+        "label": "Timezone Settings",
+        "description": "Your configured timezone is invalid. Update it in General settings to restore consistent date handling."
+      },
+      "timezoneMismatch": {
+        "label": "Timezone Settings",
+        "description": "Your browser timezone differs from the configured app timezone. Portfolio dates follow the configured timezone."
+      }
+    },
+    "affectedItems": "Affected Items ({{count}})",
+    "impact": "Impact",
+    "affectedItemsCount": "Affected items",
+    "portfolioImpact": "Portfolio impact",
+    "details": "Details",
+    "aboutThisIssue": "About this issue",
+    "dismiss": "Dismiss",
+    "dismissConfirm": {
+      "title": "Dismiss this issue?",
+      "message": "This will hide the issue from your health center. It will reappear if the underlying data changes.",
+      "pendingText": "Dismissing..."
+    }
+  }
+}
