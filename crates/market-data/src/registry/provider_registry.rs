@@ -190,7 +190,7 @@ impl ProviderRegistry {
                         {
                             Ok(()) => valid_quotes.push(quote),
                             Err(e) => {
-                                warn!("Quote validation failed for {:?}: {:?}", quote.timestamp, e);
+                                debug!("Quote validation failed for {:?}: {:?}", quote.timestamp, e);
                             }
                         }
                     }
@@ -824,7 +824,7 @@ impl ProviderRegistry {
                         {
                             Ok(()) => valid_quotes.push(quote),
                             Err(e) => {
-                                warn!("Quote validation failed for {:?}: {:?}", quote.timestamp, e);
+                                debug!("Quote validation failed for {:?}: {:?}", quote.timestamp, e);
                             }
                         }
                     }
