@@ -633,8 +633,33 @@ impl PerformanceService {
             }
 
             let twr_denominator = prev_value + flow.inflow;
-            if !chain_started && (prev_value <= Decimal::ZERO || twr_denominator < Decimal::ONE) {
-                if prev_value > Decimal::ZERO && twr_denominator < Decimal::ONE {
+
+            // Only a NEAR-ZERO POSITIVE denominator (0 <= denom < 1) is a benign
+            // dormant/dust day that merely pauses compounding. A NEGATIVE
+            // denominator (opening value + inflow < 0) is a genuine data issue
+            // and must stay fatal — it nulls the headline exactly like a
+            // negative portfolio value, rather than being silently paused.
+            let denom_is_benign_low_base =
+                twr_denominator >= Decimal::ZERO && twr_denominator < Decimal::ONE;
+
+            if twr_denominator < Decimal::ZERO {
+                not_applicable_reasons.push(format!(
+                    "TWR unavailable for {} because the return denominator (opening value + inflow) is negative. Review the underlying transactions, prices, and cash balances.",
+                    curr_point.valuation_date
+                ));
+                samples.push((
+                    curr_point.valuation_date,
+                    DailyReturnSample {
+                        twr: Decimal::ZERO,
+                        cumulative_twr_to_date: cumulative_twr_factor - Decimal::ONE,
+                        excluded_from_compounding: true,
+                    },
+                ));
+                continue;
+            }
+
+            if !chain_started && (prev_value <= Decimal::ZERO || denom_is_benign_low_base) {
+                if prev_value > Decimal::ZERO && denom_is_benign_low_base {
                     low_base_exclusions.push(format!(
                         "TWR compounding paused for {}: denominator {} is below 1 base currency unit before the return chain starts.",
                         curr_point.valuation_date, twr_denominator
@@ -651,7 +676,7 @@ impl PerformanceService {
 
             chain_started = true;
 
-            let excluded_from_compounding = twr_denominator < Decimal::ONE;
+            let excluded_from_compounding = denom_is_benign_low_base;
             let twr = if excluded_from_compounding {
                 let reason = format!(
                     "TWR compounding paused for {}: denominator {} is below 1 base currency unit; treated as a dormant/dust day.",
@@ -8708,6 +8733,60 @@ mod tests {
         // zero-move, so the headline is Some(0), not None, and the benign
         // exclusion never appears in not_applicable_reasons.
         assert_eq!(result.returns.twr.unwrap(), Decimal::ZERO);
+        assert!(!result
+            .data_quality
+            .not_applicable_reasons
+            .iter()
+            .any(|reason| reason.contains("below 1 base currency unit")));
+    }
+
+    #[test]
+    fn twr_negative_denominator_nulls_headline_as_fatal() {
+        // A NEGATIVE TWR denominator (prev_value + inflow < 0) is a genuine data
+        // issue, not a benign dormant/dust day. This mirrors the tiny-denominator
+        // setup, but the middle day's inflow is negative enough to drive the
+        // denominator below zero. Even though a later day (2026-05-03) would
+        // otherwise start the chain, the negative day must null the headline
+        // (fatal) — exactly as before the low-base-exclusion change.
+        let mut history = vec![
+            valuation(
+                "2026-05-01",
+                dec!(0.5),
+                dec!(0.5),
+                Decimal::ZERO,
+                Decimal::ZERO,
+            ),
+            valuation(
+                "2026-05-02",
+                dec!(0.5),
+                dec!(0.5),
+                Decimal::ZERO,
+                Decimal::ZERO,
+            ),
+            valuation("2026-05-03", dec!(2), dec!(2), Decimal::ZERO, Decimal::ZERO),
+        ];
+        // Window (05-01 -> 05-02): denominator 0.5 + (-1) = -0.5 < 0 -> FATAL.
+        history[1].external_inflow_base = dec!(-1);
+        // Window (05-02 -> 05-03): denominator 0.5 + 1.5 = 2 would start the chain.
+        history[2].external_inflow_base = dec!(1.5);
+
+        let result = PerformanceService::compute_account_performance(
+            &history,
+            Some(TrackingMode::Transactions),
+            None,
+            true,
+        )
+        .expect("performance should compute");
+
+        // Negative denominator is fatal: the headline TWR is nulled ...
+        assert!(result.returns.twr.is_none());
+        // ... routed to not_applicable_reasons (fatal), not the benign
+        // "below 1 base currency unit" low-base bucket.
+        assert!(result
+            .data_quality
+            .not_applicable_reasons
+            .iter()
+            .any(|reason| reason.contains("denominator") && reason.contains("negative")));
         assert!(!result
             .data_quality
             .not_applicable_reasons

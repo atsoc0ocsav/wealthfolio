@@ -108,8 +108,15 @@ pub fn run_migrations(db_path: &str) -> Result<()> {
         }
     }
 
-    // Refresh query planner statistics after applying migrations.
-    if migration_result.is_ok() {
+    // Refresh query planner statistics only when migrations were actually
+    // applied. `run_pending_migrations` returns the list of applied versions;
+    // an empty list means the schema was already current, so running ANALYZE
+    // (which rewrites sqlite_stat1) on every startup would be wasted work.
+    if migration_result
+        .as_ref()
+        .map(|applied| !applied.is_empty())
+        .unwrap_or(false)
+    {
         connection
             .batch_execute("ANALYZE;")
             .unwrap_or_else(|e| warn!("ANALYZE after migration failed: {}", e));
@@ -580,10 +587,7 @@ impl r2d2::CustomizeConnection<SqliteConnection, diesel::r2d2::Error> for Connec
         conn.batch_execute(
             "PRAGMA foreign_keys = ON;
              PRAGMA busy_timeout = 30000;
-             PRAGMA synchronous = NORMAL;
-             PRAGMA cache_size = -65536;
-             PRAGMA mmap_size = 268435456;
-             PRAGMA temp_store = MEMORY;",
+             PRAGMA synchronous = NORMAL;",
         )
         .map_err(diesel::r2d2::Error::QueryError)?;
 
