@@ -293,6 +293,14 @@ pub struct LotRecord {
     pub base_currency: String,
     /// FX rate from lot currency to base currency at acquisition.
     pub fx_rate_to_base: String,
+    /// FX rate from the lot currency to the account currency at acquisition,
+    /// when known. Persisted so the open-lot book reproduces account-currency
+    /// cost basis exactly on an append-only rebuild (no market-FX fallback).
+    /// `None` for same-currency lots or lots written before this column existed.
+    pub fx_rate_to_account: Option<String>,
+    /// Account currency that `fx_rate_to_account` converts into. `None`
+    /// whenever `fx_rate_to_account` is `None`.
+    pub account_currency: Option<String>,
     /// Cost-basis method used when this generated lot row was rebuilt.
     pub cost_basis_method: String,
 
@@ -441,6 +449,8 @@ pub fn extract_lot_records_with_cost_basis_method(
                 currency: position.currency.clone(),
                 base_currency: snapshot.currency.clone(),
                 fx_rate_to_base: Decimal::ONE.to_string(),
+                fx_rate_to_account: lot.fx_rate_to_account.map(|rate| rate.to_string()),
+                account_currency: lot.account_currency.clone(),
                 cost_basis_method: cost_basis_method.clone(),
                 split_ratio: lot.effective_split_ratio().to_string(),
                 is_closed: false,
@@ -464,14 +474,15 @@ pub fn extract_lot_records_with_cost_basis_method(
 /// (`original_quantity`, `acquisition_price`, allocated fee/tax) come from
 /// their immutable columns. Base FX is preserved from `fx_rate_to_base`.
 ///
-/// Fields the table does not retain in per-lot form are set to `None`:
-/// `fx_rate_to_position`, `fx_rate_to_account`, `account_currency`. These do
-/// not affect financial correctness on the consumers that read hydrated lots:
-/// - Realized cost basis on disposal uses `cost_basis` (= `remaining_cost_basis`).
-/// - Base-currency attribution uses `fx_rate_to_base` (preserved) and otherwise
-///   falls back to acquisition-date market FX.
-/// - Account-currency valuation reads the position's precomputed
-///   `cost_basis_account` scalar, not per-lot account FX.
+/// The account-FX book (`fx_rate_to_account`, `account_currency`) is restored
+/// from the persisted `lots.fx_rate_to_account` / `lots.account_currency`
+/// columns, so an append-only rebuild reproduces the same account-currency cost
+/// basis as a full rebuild for multi-currency accounts (no market-FX fallback).
+///
+/// `fx_rate_to_position` is not retained per-lot and stays `None`; it only
+/// records the activity→position conversion for the audit trail and affects no
+/// monetary total (quantity, cost basis, valuation, and realized P&L all flow
+/// through `remaining_quantity` / `remaining_cost_basis` / `fx_rate_to_base`).
 ///
 /// `acquisition_fees` / `acquisition_taxes` are set to the immutable allocated
 /// amounts (equal to `original_acquisition_fees` / `original_acquisition_taxes`).
@@ -513,8 +524,11 @@ pub fn lot_record_to_snapshot_lot(
         acquisition_taxes: taxes,
         original_acquisition_taxes: taxes,
         fx_rate_to_position: None,
-        fx_rate_to_account: None,
-        account_currency: None,
+        fx_rate_to_account: record
+            .fx_rate_to_account
+            .as_deref()
+            .and_then(|value| Decimal::from_str(value).ok()),
+        account_currency: record.account_currency,
         fx_rate_to_base: Decimal::from_str(&record.fx_rate_to_base).ok(),
         base_currency: Some(record.base_currency),
         source_activity_id: record.open_activity_id,
@@ -1012,6 +1026,8 @@ mod tests {
             currency: "USD".to_string(),
             base_currency: "USD".to_string(),
             fx_rate_to_base: "1".to_string(),
+            fx_rate_to_account: None,
+            account_currency: None,
             cost_basis_method: "FIFO".to_string(),
             split_ratio: "1".to_string(),
             is_closed: false,

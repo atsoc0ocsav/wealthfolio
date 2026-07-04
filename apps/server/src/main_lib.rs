@@ -265,27 +265,6 @@ pub async fn build_state(config: &Config) -> anyhow::Result<Arc<AppState>> {
 
     let pool = db::create_pool(&db_path)?;
 
-    // STEP 3 (one-time, non-fatal): upgrade legacy `holdings_snapshots` that
-    // still embed per-position lots to the compact format — auto-backup, then
-    // backfill the `snapshot_positions` cost-basis scalars from the embedded
-    // lots and strip the lots from the positions JSON. A no-op once the DB is
-    // already compact. Runs AFTER schema migrations, BEFORE serving. Backup
-    // failure aborts the strip and is logged (retried next startup) rather than
-    // blocking startup.
-    match db::strip_embedded_lots_migration(pool.as_ref(), &db_path, &data_root_path.to_string_lossy()) {
-        Ok(outcome) if outcome.needed => tracing::info!(
-            "holdings_snapshots lot-strip migration: {} snapshot(s) stripped, {} scalar(s) backfilled, vacuumed={} (backup: {:?})",
-            outcome.snapshots_migrated,
-            outcome.positions_backfilled,
-            outcome.vacuumed,
-            outcome.backup_path
-        ),
-        Ok(_) => {}
-        Err(err) => tracing::error!(
-            "holdings_snapshots lot-strip migration failed (will retry next startup): {}",
-            err
-        ),
-    }
     let (sync_outbox_wake_sender, sync_outbox_wake_receiver) = tokio::sync::mpsc::channel(128);
     let writer = write_actor::spawn_writer_with_outbox_observer(
         (*pool).clone(),

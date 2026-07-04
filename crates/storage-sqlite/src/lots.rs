@@ -48,6 +48,8 @@ struct LotRecordDB {
     currency: String,
     base_currency: String,
     fx_rate_to_base: String,
+    fx_rate_to_account: Option<String>,
+    account_currency: Option<String>,
     cost_basis_method: String,
     remaining_quantity: String,
     split_ratio: String,
@@ -120,6 +122,8 @@ impl From<LotRecordDB> for LotRecord {
             currency: r.currency,
             base_currency: r.base_currency,
             fx_rate_to_base: r.fx_rate_to_base,
+            fx_rate_to_account: r.fx_rate_to_account,
+            account_currency: r.account_currency,
             cost_basis_method: r.cost_basis_method,
             split_ratio: r.split_ratio,
             is_closed: r.is_closed != 0,
@@ -152,6 +156,8 @@ impl From<&LotRecord> for LotRecordDB {
             currency: r.currency.clone(),
             base_currency: r.base_currency.clone(),
             fx_rate_to_base: r.fx_rate_to_base.clone(),
+            fx_rate_to_account: r.fx_rate_to_account.clone(),
+            account_currency: r.account_currency.clone(),
             cost_basis_method: r.cost_basis_method.clone(),
             remaining_quantity: r.remaining_quantity.clone(),
             split_ratio: r.split_ratio.clone(),
@@ -489,6 +495,10 @@ impl LotRepositoryTrait for LotsRepository {
                             dsl::currency.eq(diesel::upsert::excluded(dsl::currency)),
                             dsl::base_currency.eq(diesel::upsert::excluded(dsl::base_currency)),
                             dsl::fx_rate_to_base.eq(diesel::upsert::excluded(dsl::fx_rate_to_base)),
+                            dsl::fx_rate_to_account
+                                .eq(diesel::upsert::excluded(dsl::fx_rate_to_account)),
+                            dsl::account_currency
+                                .eq(diesel::upsert::excluded(dsl::account_currency)),
                             dsl::cost_basis_method
                                 .eq(diesel::upsert::excluded(dsl::cost_basis_method)),
                             dsl::split_ratio.eq(diesel::upsert::excluded(dsl::split_ratio)),
@@ -533,6 +543,8 @@ impl LotRepositoryTrait for LotsRepository {
                         currency: closure.currency.clone(),
                         base_currency: closure.base_currency.clone(),
                         fx_rate_to_base: closure.fx_rate_to_base.clone(),
+                        fx_rate_to_account: None,
+                        account_currency: None,
                         cost_basis_method: closure.cost_basis_method.clone(),
                         split_ratio: closure.split_ratio.clone(),
                         is_closed: 1,
@@ -1390,6 +1402,8 @@ mod tests {
             currency: "USD".to_string(),
             base_currency: "USD".to_string(),
             fx_rate_to_base: "1".to_string(),
+            fx_rate_to_account: None,
+            account_currency: None,
             cost_basis_method: "FIFO".to_string(),
             split_ratio: "1".to_string(),
             is_closed: false,
@@ -1398,6 +1412,42 @@ mod tests {
             created_at: "2024-01-15T00:00:00.000Z".to_string(),
             updated_at: "2024-01-15T00:00:00.000Z".to_string(),
         }
+    }
+
+    /// Account-FX round trip: an open lot persisted with a non-identity account
+    /// FX (position EUR, account USD @ 1.1, base EUR) reads back with its
+    /// `fx_rate_to_account` / `account_currency` intact and hydrates onto the
+    /// in-memory `Lot` with no market-FX fallback, so an append-only rebuild
+    /// reproduces the same account-currency cost basis as a full rebuild.
+    #[tokio::test]
+    async fn lot_account_fx_survives_persist_and_hydrate_round_trip() {
+        use wealthfolio_core::lots::lot_record_to_snapshot_lot;
+
+        let (repo, pool, _dir) = setup().await;
+        insert_account(&pool, "acc1");
+        insert_asset(&pool, "EUSTX");
+
+        // Base currency EUR; position currency EUR; account currency USD.
+        let mut lot = make_lot_record("lot-fx", "acc1", "EUSTX", "10");
+        lot.currency = "EUR".to_string();
+        lot.base_currency = "EUR".to_string();
+        lot.fx_rate_to_base = "1".to_string();
+        lot.fx_rate_to_account = Some("1.1".to_string());
+        lot.account_currency = Some("USD".to_string());
+
+        repo.replace_lots_for_account("acc1", &[lot]).await.unwrap();
+
+        let stored = repo.get_open_lots_for_account("acc1").await.unwrap();
+        assert_eq!(stored.len(), 1);
+        // Persisted columns survive the DB round trip.
+        assert_eq!(stored[0].fx_rate_to_account.as_deref(), Some("1.1"));
+        assert_eq!(stored[0].account_currency.as_deref(), Some("USD"));
+
+        // Hydrate back onto the in-memory Lot with no fallback.
+        let record = stored.into_iter().next().unwrap();
+        let hydrated = lot_record_to_snapshot_lot("POS-EUSTX-acc1", record);
+        assert_eq!(hydrated.fx_rate_to_account, Some(dec("1.1")));
+        assert_eq!(hydrated.account_currency.as_deref(), Some("USD"));
     }
 
     fn make_lot_disposal(

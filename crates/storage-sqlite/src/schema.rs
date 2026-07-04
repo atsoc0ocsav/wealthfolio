@@ -362,6 +362,8 @@ diesel::table! {
         currency -> Text,
         base_currency -> Text,
         fx_rate_to_base -> Text,
+        fx_rate_to_account -> Nullable<Text>,
+        account_currency -> Nullable<Text>,
         cost_basis_method -> Text,
         remaining_quantity -> Text,
         split_ratio -> Text,
