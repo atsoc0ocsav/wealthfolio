@@ -359,6 +359,41 @@ impl SnapshotService {
             return Ok(0);
         }
 
+        // Enforce the append-only seeding contract before any mode-dependent
+        // logic runs. A `SinceDate` recalc resumes from the snapshot just
+        // before `since` and (post-STEP-2) hydrates that seed's lots from the
+        // current `lots` table. That table is the CURRENT lot book (the latest
+        // calculated state), so reusing it as a seed is only valid when the
+        // change is strictly append-only — i.e. `since` is chronologically
+        // AFTER every touched account's high-water mark, in which case the seed
+        // IS the high-water-mark snapshot. A backdated add/edit/delete (`since`
+        // on/before the high-water mark) must rebuild from inception instead,
+        // because the current lots are post-sell remaining quantities, not the
+        // lot book as of a historical date. Upgrade to `Full` in that case
+        // (safe default; also covers accounts with no calculated state yet).
+        let since_date = match &mode {
+            SnapshotRecalcMode::SinceDate(since) => Some(*since),
+            _ => None,
+        };
+        let mode = match since_date {
+            Some(since)
+                if !self.since_date_is_append_only(
+                    &accounts_to_process,
+                    since,
+                    calculation_end_date,
+                )? =>
+            {
+                info!(
+                    "Backdated recalc: SinceDate({}) is on/before the high-water mark for at least \
+                     one touched account. Rebuilding from inception (Full) so no historical \
+                     snapshot is seeded from the current lots table.",
+                    since
+                );
+                SnapshotRecalcMode::Full
+            }
+            _ => mode,
+        };
+
         let mut lot_sync_errors: Vec<String> = Vec::new();
 
         if all_activities.is_empty() && matches!(mode, SnapshotRecalcMode::Full) {
@@ -751,6 +786,45 @@ impl SnapshotService {
         Ok((activities_by_account_date, account_ids_with_activity))
     }
 
+    /// Decides whether a `SinceDate(since)` recalc is strictly *append-only*
+    /// for every account it will touch.
+    ///
+    /// An account's **high-water mark** is its latest calculated snapshot date
+    /// (`get_latest_snapshot_before_date(acc, calculation_end_date)` — the same
+    /// accessor `IncrementalFromLast` uses to find the resume point). The
+    /// `lots` table holds the CURRENT lot book keyed to that high-water mark,
+    /// so seeding a recalc from it is only valid when the earliest changed
+    /// activity lands chronologically AFTER the high-water mark: then the
+    /// seed snapshot (the one just before `since`) *is* the high-water-mark
+    /// snapshot and its hydrated lots match the table.
+    ///
+    /// Returns `false` (the caller upgrades the run to `Full`, rebuilding from
+    /// inception) when ANY touched account has `since <= high_water_mark`
+    /// (a backdated add/edit/delete) or has no calculated snapshot yet. Failing
+    /// closed to `Full` is always safe.
+    fn since_date_is_append_only(
+        &self,
+        accounts_to_process: &AccountsMap,
+        since: NaiveDate,
+        calculation_end_date: NaiveDate,
+    ) -> Result<bool> {
+        for acc_id in accounts_to_process.keys() {
+            let high_water_mark = self
+                .snapshot_repository
+                .get_latest_snapshot_before_date(acc_id, calculation_end_date)?
+                .map(|snapshot| snapshot.snapshot_date);
+            match high_water_mark {
+                // Strictly after the latest calculated state → append-only for
+                // this account.
+                Some(hwm) if since > hwm => {}
+                // On/before the high-water mark (backdated), or no calculated
+                // state yet → must rebuild from inception.
+                _ => return Ok(false),
+            }
+        }
+        Ok(true)
+    }
+
     // --- Step 6: Determine calculation range and initial state (Keyframes) ---
     // Handles real accounts.
     async fn determine_calculation_range_and_initial_state(
@@ -798,6 +872,16 @@ impl SnapshotService {
                     );
                 }
                 SnapshotRecalcMode::SinceDate(since) => {
+                    // Invariant: by the time a `SinceDate` reaches here it is
+                    // strictly append-only — `calculate_holdings_snapshots_internal`
+                    // upgrades any backdated `SinceDate` (`since` on/before an
+                    // account's high-water mark) to `Full`. So `since` is after
+                    // every touched account's high-water mark, which means the
+                    // snapshot located below is that high-water-mark snapshot
+                    // (the latest calculated state). Seeding from it — and
+                    // hydrating its lots from the current `lots` table — is
+                    // therefore valid.
+                    //
                     // Use the snapshot strictly before `since` as the initial state,
                     // then recalculate forward from `since`.
                     // get_latest_snapshot_before_date is inclusive (<=), so subtract one day
@@ -873,9 +957,17 @@ impl SnapshotService {
 
             if effective_start_date <= calculation_end_date {
                 if let Some(mut snapshot) = initial_snapshot_for_acc {
-                    // Seed lots come from the normalized `lots` table (source of
-                    // truth). Newly written snapshots omit embedded lots (STEP 2),
-                    // so carried positions would otherwise seed with zero lots.
+                    // A seed snapshot only reaches here for the append-only
+                    // modes — `IncrementalFromLast` (resumes from the latest
+                    // keyframe) or a `SinceDate` that survived the backdated →
+                    // `Full` upgrade (so `since` is after the high-water mark,
+                    // making this snapshot the latest calculated state). `Full`
+                    // never populates `initial_snapshot_for_acc`. That makes it
+                    // safe to hydrate the seed's lots from the current `lots`
+                    // table (the source of truth for the latest calculated
+                    // state): newly written snapshots omit embedded lots
+                    // (STEP 2), so carried positions would otherwise seed with
+                    // zero lots.
                     self.hydrate_seed_lots_from_table(&mut snapshot).await;
                     start_keyframes.insert(acc_id.clone(), snapshot);
                 } else {
@@ -924,15 +1016,25 @@ impl SnapshotService {
     /// `lots` table (the source of truth) for positions whose embedded lots are
     /// empty.
     ///
-    /// Incremental (`IncrementalFromLast` / `SinceDate`) recalcs resume from a
-    /// persisted keyframe snapshot. Since STEP 2 (`#[serde(skip_serializing)]`
-    /// on `Position.lots`) newly written snapshots omit embedded lots, so
-    /// carried / out-of-window positions deserialize with zero lots. Replaying
-    /// from that empty seed and extracting lots would (a) trip the
-    /// `lots sum to 0` consistency check and (b) leave stale rows because
-    /// `sync_lots_for_account` preserves existing rows on empty input. Sourcing
-    /// the seed lots from the table keeps the in-memory recalc and the table
-    /// consistent.
+    /// **Invariant: this only ever runs against an append-only seed** — the
+    /// latest calculated state. Callers reach it only for `IncrementalFromLast`
+    /// (resumes from the latest keyframe) or a `SinceDate` that survived the
+    /// backdated → `Full` upgrade in `calculate_holdings_snapshots_internal`
+    /// (so `since` is after the high-water mark and the seed IS the latest
+    /// keyframe). Backdated `SinceDate` recalcs are rebuilt from inception as
+    /// `Full` and never hydrate here, because the current `lots` table holds
+    /// post-sell remaining quantities, not the lot book as of a historical
+    /// date. Sourcing seed lots from the table would corrupt a historical seed.
+    ///
+    /// Given that invariant, sourcing seed lots from the table is correct: the
+    /// table is the source of truth for the latest calculated state. STEP 2
+    /// (`#[serde(skip_serializing)]` on `Position.lots`) means newly written
+    /// snapshots omit embedded lots, so carried / out-of-window positions
+    /// deserialize with zero lots. Replaying from that empty seed and
+    /// extracting lots would (a) trip the `lots sum to 0` consistency check and
+    /// (b) leave stale rows because `sync_lots_for_account` preserves existing
+    /// rows on empty input. Hydrating from the table keeps the in-memory recalc
+    /// and the table consistent.
     ///
     /// Positions that still carry embedded lots (pre-STEP-2 snapshots) are left
     /// untouched. A `Full` recalc never reaches here — it seeds from a freshly

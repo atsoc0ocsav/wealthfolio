@@ -1049,6 +1049,12 @@ mod tests {
     struct SeededLotRepository {
         open_lots: Arc<RwLock<Vec<LotRecord>>>,
         synced_lots: Arc<RwLock<Vec<LotRecord>>>,
+        /// Counts calls to `get_open_lots_for_account`, which in the snapshot
+        /// recalc path happens **only** inside `hydrate_seed_lots_from_table`.
+        /// A non-zero count therefore means the recalc hydrated its seed from
+        /// the current `lots` table (the append-only path); zero means it did
+        /// not (a `Full` rebuild from inception).
+        open_lots_calls: Arc<RwLock<usize>>,
     }
 
     impl SeededLotRepository {
@@ -1056,11 +1062,17 @@ mod tests {
             Self {
                 open_lots: Arc::new(RwLock::new(open_lots)),
                 synced_lots: Arc::new(RwLock::new(Vec::new())),
+                open_lots_calls: Arc::new(RwLock::new(0)),
             }
         }
 
         fn synced_lots(&self) -> Vec<LotRecord> {
             self.synced_lots.read().unwrap().clone()
+        }
+
+        /// Number of times the seed-hydration read the current lots table.
+        fn open_lots_call_count(&self) -> usize {
+            *self.open_lots_calls.read().unwrap()
         }
 
         fn synced_qty_for_asset(&self, asset_id: &str) -> Decimal {
@@ -1095,6 +1107,7 @@ mod tests {
         }
 
         async fn get_open_lots_for_account(&self, account_id: &str) -> AppResult<Vec<LotRecord>> {
+            *self.open_lots_calls.write().unwrap() += 1;
             Ok(self
                 .open_lots
                 .read()
@@ -1221,6 +1234,12 @@ mod tests {
     struct MockSnapshotRepository {
         snapshots: Arc<RwLock<HashMap<String, Vec<AccountStateSnapshot>>>>, // account_id -> snapshots
         saved_snapshots: Arc<RwLock<Vec<AccountStateSnapshot>>>, // track what was saved via replace_all_snapshots
+        // Records which persistence path each recalc took, so tests can assert
+        // the chosen recalc mode: `Full` calls `overwrite_all_snapshots_for_account`
+        // while `IncrementalFromLast` / `SinceDate` call
+        // `overwrite_snapshots_for_account_in_range`.
+        overwrite_all_calls: Arc<RwLock<Vec<String>>>,
+        overwrite_range_calls: Arc<RwLock<Vec<String>>>,
     }
 
     impl MockSnapshotRepository {
@@ -1228,6 +1247,8 @@ mod tests {
             Self {
                 snapshots: Arc::new(RwLock::new(HashMap::new())),
                 saved_snapshots: Arc::new(RwLock::new(Vec::new())),
+                overwrite_all_calls: Arc::new(RwLock::new(Vec::new())),
+                overwrite_range_calls: Arc::new(RwLock::new(Vec::new())),
             }
         }
 
@@ -1243,6 +1264,18 @@ mod tests {
 
         fn get_saved_snapshots(&self) -> Vec<AccountStateSnapshot> {
             self.saved_snapshots.read().unwrap().clone()
+        }
+
+        /// Account IDs passed to `overwrite_all_snapshots_for_account` (the
+        /// `Full`-mode persistence path).
+        fn overwrite_all_calls(&self) -> Vec<String> {
+            self.overwrite_all_calls.read().unwrap().clone()
+        }
+
+        /// Account IDs passed to `overwrite_snapshots_for_account_in_range` (the
+        /// incremental `IncrementalFromLast` / `SinceDate` persistence path).
+        fn overwrite_range_calls(&self) -> Vec<String> {
+            self.overwrite_range_calls.read().unwrap().clone()
         }
     }
 
@@ -1393,6 +1426,10 @@ mod tests {
             end_date: NaiveDate,
             snapshots_to_save: &[AccountStateSnapshot],
         ) -> AppResult<()> {
+            self.overwrite_range_calls
+                .write()
+                .unwrap()
+                .push(account_id.to_string());
             let mut saved_store = self.saved_snapshots.write().unwrap();
             saved_store.clear();
             saved_store.extend(snapshots_to_save.iter().cloned());
@@ -1423,6 +1460,10 @@ mod tests {
             account_id: &str,
             snapshots_to_save: &[AccountStateSnapshot],
         ) -> AppResult<()> {
+            self.overwrite_all_calls
+                .write()
+                .unwrap()
+                .push(account_id.to_string());
             let mut store = self.snapshots.write().unwrap();
             // Delete all existing snapshots for the account
             store.remove(account_id);
@@ -1870,6 +1911,369 @@ mod tests {
         assert!(
             !lot_repo_assert.synced_lots().is_empty(),
             "sync must receive non-empty lots so the storage orphan-cleanup guard runs"
+        );
+    }
+
+    /// `date` minus `n` days (test-local convenience for building
+    /// high-water-mark / since-date fixtures relative to today).
+    fn days_before(date: NaiveDate, n: u64) -> NaiveDate {
+        date.checked_sub_days(chrono::Days::new(n)).unwrap()
+    }
+
+    /// Backdated recalc guard (append-only seeding contract): a `SinceDate`
+    /// whose date is on/before an account's high-water mark — a backdated
+    /// add/edit/delete — must rebuild from inception as `Full` and must NOT
+    /// hydrate the seed from the current `lots` table (which holds post-sell
+    /// remaining quantities, not the lot book as of that historical date).
+    #[tokio::test]
+    async fn test_backdated_since_date_upgrades_to_full_and_skips_hydration() {
+        let base_currency_arc = Arc::new(RwLock::new("USD".to_string()));
+        let mut account_repo = MockAccountRepository::new();
+        let acc = create_test_account("acc1", "USD", "Backdated Account");
+        account_repo.add_account(acc.clone());
+        let account_repo = Arc::new(account_repo);
+
+        let today = valuation_date_today();
+        let inception = days_before(today, 10);
+        let hwm_date = days_before(today, 5);
+        // Strictly BEFORE the high-water mark → backdated.
+        let backdated_since = days_before(today, 6);
+
+        // Inception activity so the account is processed at all.
+        let deposit = create_test_activity(
+            "dep1",
+            &acc.id,
+            Some("CASH:USD"),
+            "DEPOSIT",
+            inception,
+            None,
+            None,
+            Some(dec!(10000)),
+            "USD",
+        );
+        let activity_repo = Arc::new(MockActivityRepositoryWithData::new(vec![deposit]));
+        let fx = Arc::new(MockFxService::new());
+        let asset_repo = Arc::new(MockAssetRepository::new());
+
+        // High-water-mark snapshot = latest calculated state.
+        let snapshot_repo = Arc::new(MockSnapshotRepository::new());
+        snapshot_repo.add_snapshots(vec![create_blank_snapshot(
+            &acc.id,
+            "USD",
+            &hwm_date.format("%Y-%m-%d").to_string(),
+        )]);
+
+        // Current lots table has a lot; if a historical seed were hydrated,
+        // get_open_lots_for_account would be invoked.
+        let lot_repo = SeededLotRepository::new(vec![make_open_lot_record(
+            "lot-aapl",
+            &acc.id,
+            "AAPL",
+            &hwm_date.format("%Y-%m-%d").to_string(),
+            dec!(10),
+            dec!(100),
+            "USD",
+            "USD",
+            dec!(1),
+        )]);
+        let lot_repo_assert = lot_repo.clone();
+
+        let svc = SnapshotService::new(
+            base_currency_arc,
+            account_repo,
+            activity_repo,
+            snapshot_repo.clone(),
+            asset_repo,
+            fx,
+        )
+        .with_lot_repository(Arc::new(lot_repo));
+
+        svc.recalculate_holdings_snapshots(
+            Some(std::slice::from_ref(&acc.id)),
+            SnapshotRecalcMode::SinceDate(backdated_since),
+        )
+        .await
+        .expect("backdated recalc should succeed");
+
+        // Chosen mode is Full: it took the overwrite-all persistence path and
+        // never the incremental range path.
+        assert_eq!(
+            snapshot_repo.overwrite_all_calls(),
+            vec![acc.id.clone()],
+            "backdated SinceDate must rebuild from inception via the Full persistence path"
+        );
+        assert!(
+            snapshot_repo.overwrite_range_calls().is_empty(),
+            "backdated SinceDate must NOT take the incremental range persistence path"
+        );
+        // And it never hydrated a historical seed from the current lots table.
+        assert_eq!(
+            lot_repo_assert.open_lots_call_count(),
+            0,
+            "a from-inception (Full) rebuild must never hydrate the seed from the current lots table"
+        );
+    }
+
+    /// Strictly append-only recalc: a `SinceDate` whose date is AFTER the
+    /// account's high-water mark stays incremental, seeds from the latest
+    /// calculated snapshot, hydrates its (STEP-2 empty) lots from the current
+    /// lots table, and produces a lot book consistent with the carried
+    /// position quantity (no `lots sum to 0`).
+    #[tokio::test]
+    async fn test_append_only_since_date_hydrates_seed_from_current_lots() {
+        let base_currency_arc = Arc::new(RwLock::new("USD".to_string()));
+        let mut account_repo = MockAccountRepository::new();
+        let acc = create_test_account("acc1", "USD", "Append Only Account");
+        account_repo.add_account(acc.clone());
+        let account_repo = Arc::new(account_repo);
+
+        let today = valuation_date_today();
+        let inception = days_before(today, 10);
+        let hwm_date = days_before(today, 5);
+        // Strictly AFTER the high-water mark → append-only.
+        let append_since = days_before(today, 2);
+
+        let deposit = create_test_activity(
+            "dep1",
+            &acc.id,
+            Some("CASH:USD"),
+            "DEPOSIT",
+            inception,
+            None,
+            None,
+            Some(dec!(10000)),
+            "USD",
+        );
+        let activity_repo = Arc::new(MockActivityRepositoryWithData::new(vec![deposit]));
+        let fx = Arc::new(MockFxService::new());
+        let asset_repo = Arc::new(MockAssetRepository::new());
+
+        // High-water-mark seed: carried AAPL position with EMPTY embedded lots.
+        let hwm_str = hwm_date.format("%Y-%m-%d").to_string();
+        let mut seed = create_blank_snapshot(&acc.id, "USD", &hwm_str);
+        seed.positions.insert(
+            "AAPL".to_string(),
+            carried_position_empty_lots(
+                &acc.id,
+                "AAPL",
+                dec!(10),
+                "USD",
+                dec!(1000),
+                dec!(1000),
+                dec!(1000),
+            ),
+        );
+        let snapshot_repo = Arc::new(MockSnapshotRepository::new());
+        snapshot_repo.add_snapshots(vec![seed]);
+
+        let lot_repo = SeededLotRepository::new(vec![make_open_lot_record(
+            "lot-aapl",
+            &acc.id,
+            "AAPL",
+            &hwm_str,
+            dec!(10),
+            dec!(100),
+            "USD",
+            "USD",
+            dec!(1),
+        )]);
+        let lot_repo_assert = lot_repo.clone();
+
+        let svc = SnapshotService::new(
+            base_currency_arc,
+            account_repo,
+            activity_repo,
+            snapshot_repo.clone(),
+            asset_repo,
+            fx,
+        )
+        .with_lot_repository(Arc::new(lot_repo));
+
+        svc.recalculate_holdings_snapshots(
+            Some(std::slice::from_ref(&acc.id)),
+            SnapshotRecalcMode::SinceDate(append_since),
+        )
+        .await
+        .expect("append-only recalc should succeed");
+
+        // Incremental range path (not Full).
+        assert_eq!(
+            snapshot_repo.overwrite_range_calls(),
+            vec![acc.id.clone()],
+            "append-only SinceDate must use the incremental range persistence path"
+        );
+        assert!(
+            snapshot_repo.overwrite_all_calls().is_empty(),
+            "append-only SinceDate must NOT rebuild via the Full persistence path"
+        );
+        // Hydration ran and produced a lot book matching the carried quantity.
+        assert!(
+            lot_repo_assert.open_lots_call_count() >= 1,
+            "append-only recalc must hydrate the seed from the current lots table"
+        );
+        assert_eq!(
+            lot_repo_assert.synced_qty_for_asset("AAPL"),
+            dec!(10),
+            "hydrated lots must sum to the carried position quantity (no lots-sum-to-0)"
+        );
+    }
+
+    /// Regression (multi-currency): an append-only incremental rebuild yields
+    /// the same `cost_basis_account` as a full rebuild. Base = USD, account
+    /// currency = EUR, AAPL listed in USD, so `cost_basis_account` is genuinely
+    /// FX-derived (differs from the USD base cost basis). The append-only run
+    /// seeds from the full run's snapshot (lots dropped, as STEP-2 does) and
+    /// hydrates from the full run's lots — exercising the PART-A account-FX
+    /// persistence end to end.
+    #[tokio::test]
+    async fn test_append_only_incremental_matches_full_on_cost_basis_account_multi_currency() {
+        let today = valuation_date_today();
+        let inception = days_before(today, 10);
+
+        let build_fx = || {
+            let mut fx = MockFxService::new();
+            let mut d = days_before(today, 12);
+            while d <= today {
+                // 1 USD = 0.9 EUR (both directions) for every date in range.
+                fx.add_bidirectional_rate("USD", "EUR", d, dec!(0.9));
+                d = d.succ_opt().unwrap();
+            }
+            Arc::new(fx)
+        };
+        let build_activities = || {
+            let deposit = create_test_activity(
+                "dep1",
+                "acc1",
+                Some("CASH:USD"),
+                "DEPOSIT",
+                inception,
+                None,
+                None,
+                Some(dec!(10000)),
+                "USD",
+            );
+            let buy = create_test_activity(
+                "buy1",
+                "acc1",
+                Some("AAPL"),
+                "BUY",
+                inception,
+                Some(dec!(10)),
+                Some(dec!(150)),
+                Some(dec!(1500)),
+                "USD",
+            );
+            Arc::new(MockActivityRepositoryWithData::new(vec![deposit, buy]))
+        };
+
+        // --- Run 1: FULL rebuild from inception. ---
+        let acc = create_test_account("acc1", "EUR", "Multi-Ccy Account");
+        let mut account_repo = MockAccountRepository::new();
+        account_repo.add_account(acc.clone());
+        let full_snap = Arc::new(MockSnapshotRepository::new());
+        let full_lots = SeededLotRepository::new(vec![]);
+        let full_lots_assert = full_lots.clone();
+        let full_svc = SnapshotService::new(
+            Arc::new(RwLock::new("USD".to_string())),
+            Arc::new(account_repo),
+            build_activities(),
+            full_snap.clone(),
+            Arc::new(MockAssetRepository::new()),
+            build_fx(),
+        )
+        .with_lot_repository(Arc::new(full_lots));
+
+        full_svc
+            .recalculate_holdings_snapshots(
+                Some(std::slice::from_ref(&acc.id)),
+                SnapshotRecalcMode::Full,
+            )
+            .await
+            .expect("full recalc should succeed");
+
+        let full_pos = full_snap
+            .get_snapshots_by_account(&acc.id, None, None)
+            .unwrap()
+            .into_iter()
+            .max_by_key(|s| s.snapshot_date)
+            .and_then(|s| s.positions.get("AAPL").cloned())
+            .expect("full rebuild must produce an AAPL position");
+        let full_cba = full_pos.cost_basis_account;
+        let produced_lots = full_lots_assert.synced_lots();
+
+        assert!(
+            full_cba.is_some(),
+            "full rebuild must populate cost_basis_account"
+        );
+        assert_ne!(
+            full_cba, full_pos.cost_basis_base,
+            "multi-currency: account-currency cost basis must differ from base (FX applied)"
+        );
+        assert!(
+            !produced_lots.is_empty(),
+            "full rebuild must produce AAPL lots"
+        );
+
+        // --- Run 2: APPEND-ONLY incremental seeded from the full result. ---
+        let hwm_date = days_before(today, 5);
+        let append_since = days_before(today, 2); // strictly after the high-water mark
+        let acc2 = create_test_account("acc1", "EUR", "Multi-Ccy Account");
+        let mut account_repo2 = MockAccountRepository::new();
+        account_repo2.add_account(acc2.clone());
+
+        // High-water-mark seed = the full-produced position with lots dropped
+        // (mirrors STEP-2 serialization), forcing hydration from the table.
+        let mut seed_pos = full_pos.clone();
+        seed_pos.lots = VecDeque::new();
+        let mut seed =
+            create_blank_snapshot(&acc2.id, "EUR", &hwm_date.format("%Y-%m-%d").to_string());
+        seed.positions.insert("AAPL".to_string(), seed_pos);
+        let incr_snap = Arc::new(MockSnapshotRepository::new());
+        incr_snap.add_snapshots(vec![seed]);
+
+        let incr_lots = SeededLotRepository::new(produced_lots);
+        let incr_lots_assert = incr_lots.clone();
+        let incr_svc = SnapshotService::new(
+            Arc::new(RwLock::new("USD".to_string())),
+            Arc::new(account_repo2),
+            build_activities(),
+            incr_snap.clone(),
+            Arc::new(MockAssetRepository::new()),
+            build_fx(),
+        )
+        .with_lot_repository(Arc::new(incr_lots));
+
+        incr_svc
+            .recalculate_holdings_snapshots(
+                Some(std::slice::from_ref(&acc2.id)),
+                SnapshotRecalcMode::SinceDate(append_since),
+            )
+            .await
+            .expect("append-only recalc should succeed");
+
+        let incr_pos = incr_snap
+            .get_snapshots_by_account(&acc2.id, None, None)
+            .unwrap()
+            .into_iter()
+            .max_by_key(|s| s.snapshot_date)
+            .and_then(|s| s.positions.get("AAPL").cloned())
+            .expect("append-only rebuild must carry the AAPL position");
+
+        // Headline parity: append-only incremental == full on cost_basis_account.
+        assert_eq!(
+            incr_pos.cost_basis_account, full_cba,
+            "append-only incremental cost_basis_account must equal the full rebuild"
+        );
+        // Confirm the append-only path actually hydrated and wrote a consistent
+        // lot book (leveraging the PART-A account-FX lot persistence).
+        assert!(
+            incr_lots_assert.open_lots_call_count() >= 1,
+            "append-only recalc must hydrate the seed from the current lots table"
+        );
+        assert_eq!(
+            incr_lots_assert.synced_qty_for_asset("AAPL"),
+            dec!(10),
+            "append-only incremental lot book must match the position quantity"
         );
     }
 
